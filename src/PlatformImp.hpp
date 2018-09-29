@@ -1,4 +1,13 @@
 /*
+ * Copyright 2017, 2018 Science and Technology Facilities Council (UK)
+ * IBM Confidential
+ * OCO Source Materials
+ * 5747-SM3
+ * (c) Copyright IBM Corp. 2017, 2018
+ * The source code for this program is not published or otherwise
+ * divested of its trade secrets, irrespective of what has
+ * been deposited with the U.S. Copyright Office.
+ *
  * Copyright (c) 2015, 2016, 2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,6 +46,7 @@
 #define NAME_MAX 1024
 #endif
 
+#include "geopm_arch.h"
 #include <sys/types.h>
 #include <stdint.h>
 #include <vector>
@@ -44,7 +54,13 @@
 #include <utility>
 #include <string>
 
+#include "geopm_time.h"
 #include "PlatformTopology.hpp"
+
+#ifdef POWERPC
+#include "perf_event.h"
+    #define POWER9_PLATFORM_ID 0x04E
+#endif
 
 namespace geopm
 {
@@ -70,6 +86,8 @@ namespace geopm
     0x645 - Haswell
     0x646 - Haswell
     0x63f - Haswell E
+
+    0x04E  - IBM Power9
     */
     /// @brief This class provides an abstraction of specific functionality
     /// and attributes of different hardware implementations. It holds
@@ -254,21 +272,33 @@ namespace geopm
             uint64_t msr_read(int device_type, int device_index, off_t msr_offset);
             /// @brief Batch read values from multiple Model Specific Registers.
             void batch_msr_read(void);
+#ifdef POWERPC
+            void pf_event_read(int cpu);
+            size_t pf_event_read_data_size();
+#endif
             /// @brief Retrieve the address offset of a Model Specific Register.
             /// @param [in] msr_name String name of the requested MSR.
             /// @return Address offset of the requested MSR.
             virtual off_t msr_offset(std::string msr_name);
+            virtual off_t msr_offset(int idx);
             /// @brief Retrieve the write mask of a Model Specific Register.
             /// @param [in] msr_name String name of the requested MSR.
             /// @return Write mask of the requested MSR.
             unsigned long msr_mask(std::string msr_name);
+            size_t msr_size(void);
             /// @brief Set the path to the MSR special file. In Linux this path
             /// is /dev/msr/cpu_num.
             /// @param [in] cpu_num Logical cpu number to set the path for.
             virtual void msr_path(int cpu_num);
+    
+#ifdef X86
             /// @brief Open a MSR special file.
             /// @param [in] cpu Number of logical cpu to open.
             void msr_open(int cpu);
+#elif defined(POWERPC)
+            int perf_event_open(struct perf_event_attr *attr, pid_t pid, int cpu, int group_fd, unsigned long flags);
+            void pf_event_open(int cpu);
+#endif
             /// @brief Close a MSR special file.
             /// @param [in] cpu Number of logical cpu to close.
             void msr_close(int cpu);
@@ -303,6 +333,9 @@ namespace geopm
             PlatformTopology m_topology;
             /// @brief Holds the file descriptors for the per-cpu special files.
             std::vector<int> m_cpu_file_desc;
+#ifdef POWERPC
+            std::vector<int> m_cpu_other_file_desc;
+#endif
             /// @brief Map of MSR string name to address offset and write mask.
             /// This is a map is keyed by a string of the MSR's name and maps a pair
             /// which contain the MSR's offset (first) and write mask (second).
@@ -336,8 +369,16 @@ namespace geopm
             int m_msr_batch_desc;
             bool m_is_batch_enabled;
             struct m_msr_batch_array m_batch;
+#ifdef POWERPC
+            uint64_t** m_pf_event_read_data;
+#endif
             uint64_t m_trigger_offset;
             uint64_t m_trigger_value;
+      
+            // FIXME: temporary only to get return from is_updated()
+            struct geopm_time_s begin_time;
+            struct geopm_time_s end_time;
+      
 
         private:
             void build_msr_save_string(std::ofstream &save_file, int device_type, int device_index, std::string name);

@@ -1,4 +1,13 @@
 /*
+ * Copyright 2017, 2018 Science and Technology Facilities Council (UK)
+ * IBM Confidential
+ * OCO Source Materials
+ * 5747-SM3
+ * (c) Copyright IBM Corp. 2017, 2018
+ * The source code for this program is not published or otherwise
+ * divested of its trade secrets, irrespective of what has
+ * been deposited with the U.S. Copyright Office.
+ *
  * Copyright (c) 2015, 2016, 2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
@@ -50,7 +59,7 @@
 #include <unistd.h>
 
 #include "geopm.h"
-#include "geopm_ctl.h"
+#include "geopm_arch.h"
 #include "geopm_version.h"
 #include "geopm_signal_handler.h"
 #include "geopm_hash.h"
@@ -183,6 +192,7 @@ namespace geopm
         , m_max_fanout(0)
         , m_global_policy(global_policy)
         , m_tree_comm(NULL)
+        , m_leaf_decider(NULL)
         , m_decider_factory(NULL)
         , m_platform_factory(NULL)
         , m_platform(NULL)
@@ -222,10 +232,6 @@ namespace geopm
             struct geopm_plugin_description_s plugin_desc;
             geopm_error_destroy_shmem();
             check_mpi(MPI_Comm_rank(m_ppn1_comm, &m_ppn1_rank));
-            if (m_ppn1_rank == 0 && m_global_policy == NULL) {
-                throw Exception("Root of control tree does not have a valid global policy pointer",
-                                GEOPM_ERROR_INVALID, __FILE__, __LINE__);
-            }
             if (!m_ppn1_rank) { // We are the root of the tree
                 plugin_desc.tree_decider[NAME_MAX - 1] = '\0';
                 plugin_desc.leaf_decider[NAME_MAX - 1] = '\0';
@@ -241,12 +247,21 @@ namespace geopm
                     case GEOPM_POLICY_MODE_PERF_BALANCE_DYNAMIC:
                         snprintf(plugin_desc.tree_decider, NAME_MAX, "power_balancing");
                         snprintf(plugin_desc.leaf_decider, NAME_MAX, "power_governing");
+#ifdef POWERPC
+			snprintf(plugin_desc.platform, NAME_MAX, "occ");
+#else
                         snprintf(plugin_desc.platform, NAME_MAX, "rapl");
+#endif
                         break;
                     case GEOPM_POLICY_MODE_STATIC:
                         snprintf(plugin_desc.tree_decider, NAME_MAX, "static_policy");
                         snprintf(plugin_desc.leaf_decider, NAME_MAX, "static_policy");
+#ifdef POWERPC
+			snprintf(plugin_desc.platform, NAME_MAX, "occ");
+#else
                         snprintf(plugin_desc.platform, NAME_MAX, "rapl");
+#endif
+
                         break;
                     case GEOPM_POLICY_MODE_DYNAMIC:
                         strncpy(plugin_desc.tree_decider, m_global_policy->tree_decider().c_str(), NAME_MAX -1);
@@ -288,8 +303,8 @@ namespace geopm
             int num_level = m_tree_comm->num_level();
             m_region.resize(num_level);
             m_policy.resize(num_level);
-            m_decider.resize(num_level);
-            std::fill(m_decider.begin(), m_decider.end(), (IDecider *)NULL);
+            m_tree_decider.resize(num_level);
+            std::fill(m_tree_decider.begin(), m_tree_decider.end(), (IDecider *)NULL);
             m_last_policy_msg.resize(num_level);
             std::fill(m_last_policy_msg.begin(), m_last_policy_msg.end(), GEOPM_POLICY_UNKNOWN);
             m_is_epoch_changed.resize(num_level);
@@ -310,47 +325,54 @@ namespace geopm
                     m_counter_energy_start += (*it).signal;
                 }
             }
+
             double upper_bound;
             double lower_bound;
             m_platform->bound(upper_bound, lower_bound);
             m_throttle_limit_mhz = m_platform->throttle_limit_mhz();
 
             m_decider_factory = new DeciderFactory;
-            m_decider[0] = m_decider_factory->decider(std::string(plugin_desc.leaf_decider));
-            m_decider[0]->bound(upper_bound, lower_bound);
 
-            int num_domain = m_platform->num_control_domain();
-            m_telemetry_sample.resize(num_domain, {0, {{0, 0}}, {0}});
-            m_policy[0] = new Policy(num_domain);
-            m_region[0].insert(std::pair<uint64_t, Region *>
-                               (GEOPM_REGION_ID_EPOCH,
-                                new Region(GEOPM_REGION_ID_EPOCH,
-                                           num_domain,
-                                           0,
-                                           NULL)));
+            m_leaf_decider = m_decider_factory->decider(std::string(plugin_desc.leaf_decider));
+            m_leaf_decider->bound(upper_bound, lower_bound);
 
-            num_domain = m_tree_comm->level_size(0);
-            m_max_fanout = num_domain;
-            for (int level = 1; level < num_level; ++level) {
+            int num_domain;
+            for (int level = 0; level < num_level; ++level) {
+                if (level == 0) {
+                    num_domain = m_platform->num_control_domain();
+                    m_telemetry_sample.resize(num_domain, {0, {{0, 0}}, {0}});
+                }
+                else {
+                    num_domain = m_tree_comm->level_size(level - 1);
+                }
                 m_policy[level] = new Policy(num_domain);
+                if (m_platform->control_domain() == GEOPM_CONTROL_DOMAIN_POWER && level == 1) {
+                    upper_bound *= m_platform->num_control_domain();
+                    lower_bound *= m_platform->num_control_domain();
+                    if (level > 1) {
+                        int i = level - 1;
+                        while (i >= 0) {
+                            upper_bound *= m_tree_comm->level_size(i);
+                            --i;
+                        }
+                    }
+                }
+                m_tree_decider[level] = m_decider_factory->decider(std::string(plugin_desc.tree_decider));
+                m_tree_decider[level]->bound(upper_bound, lower_bound);
                 m_region[level].insert(std::pair<uint64_t, Region *>
                                        (GEOPM_REGION_ID_EPOCH,
                                         new Region(GEOPM_REGION_ID_EPOCH,
                                                    num_domain,
-                                                   level,
-                                                   NULL)));
-                m_decider[level] = m_decider_factory->decider(std::string(plugin_desc.tree_decider));
-                m_decider[level]->bound(upper_bound, lower_bound);
-                upper_bound *= num_domain;
-                lower_bound *= num_domain;
-                num_domain = m_tree_comm->level_size(level);
-                if (num_domain > m_max_fanout) {
-                    m_max_fanout = num_domain;
+                                                   level)));
+                if (m_tree_comm->level_size(level) > m_max_fanout) {
+                    m_max_fanout = m_tree_comm->level_size(level);
                 }
             }
 
+	    
             // Barrier to ensure all ProfileSamplers are created at the same time.
             MPI_Barrier(m_ppn1_comm);
+
             m_sampler = new ProfileSampler(M_SHMEM_REGION_SIZE);
 
             // Prepare and send the Global Policy header to every node so that the trace files contain the
@@ -370,6 +392,7 @@ namespace geopm
             MPI_Bcast(header_vec.data(), header_size, MPI_CHAR, 0, m_ppn1_comm);
 
             m_tracer = new Tracer(header_vec.data());
+
         }
     }
 
@@ -392,9 +415,10 @@ namespace geopm
             }
             delete m_policy[level];
         }
-        for (auto it = m_decider.begin(); it != m_decider.end(); ++it) {
+        for (auto it = m_tree_decider.begin(); it != m_tree_decider.end(); ++it) {
             delete (*it);
         }
+        delete m_leaf_decider;
         delete m_decider_factory;
         delete m_platform_factory;
         delete m_tree_comm;
@@ -506,7 +530,7 @@ namespace geopm
         m_tree_comm->get_policy(level, policy_msg);
         for (; policy_msg.mode != GEOPM_POLICY_MODE_SHUTDOWN && level != 0; --level) {
             if (!geopm_is_policy_equal(&policy_msg, &(m_last_policy_msg[level]))) {
-                m_decider[level]->update_policy(policy_msg, *(m_policy[level]));
+                m_tree_decider[level]->update_policy(policy_msg, *(m_policy[level]));
                 m_policy[level]->policy_message(GEOPM_REGION_ID_EPOCH, policy_msg, child_policy_msg);
                 m_tree_comm->send_policy(level - 1, child_policy_msg);
                 m_last_policy_msg[level] = policy_msg;
@@ -518,9 +542,9 @@ namespace geopm
         }
         else {
             // update the leaf level (0)
-            if (!geopm_is_policy_equal(&policy_msg, &(m_last_policy_msg[0]))) {
-                m_decider[0]->update_policy(policy_msg, *(m_policy[0]));
-                m_last_policy_msg[0] = policy_msg;
+            if (!geopm_is_policy_equal(&policy_msg, &(m_last_policy_msg[level]))) {
+                m_leaf_decider->update_policy(policy_msg, *(m_policy[level]));
+                m_last_policy_msg[level] = policy_msg;
                 m_tracer->update(policy_msg);
             }
         }
@@ -545,7 +569,7 @@ namespace geopm
                     // use .begin() because map has only one entry
                     auto it = m_region[level].begin();
                     (*it).second->insert(child_sample);
-                    if (m_decider[level]->update_policy(*((*it).second), *(m_policy[level]))) {
+                    if (m_tree_decider[level]->update_policy(*((*it).second), *(m_policy[level]))) {
                         m_policy[level]->policy_message(GEOPM_REGION_ID_EPOCH, m_last_policy_msg[level], child_policy_msg);
                         m_tree_comm->send_policy(level - 1, child_policy_msg);
                     }
@@ -632,8 +656,7 @@ namespace geopm
                                           std::pair<uint64_t, Region *> (map_id,
                                                   new Region(base_region_id,
                                                              m_platform->num_control_domain(),
-                                                             level,
-                                                             m_sampler->tprof_table())));
+                                                             level)));
                         region_it = tmp_it.first;
                     }
                     (*region_it).second->increment_mpi_time(region_mpi_time);
@@ -673,8 +696,7 @@ namespace geopm
                                                   std::pair<uint64_t, Region *> (map_id,
                                                           new Region((*sample_it).second.region_id,
                                                                      m_platform->num_control_domain(),
-                                                                     level,
-                                                                     m_sampler->tprof_table())));
+                                                                     level)));
                                 region_it = tmp_it.first;
                             }
                             (*region_it).second->entry();
@@ -713,7 +735,6 @@ namespace geopm
                         is_exit_found = false;
                     }
                 }
-
                 m_platform->transform_rank_data(region_id_all, m_msr_sample[0].timestamp, aligned_signal, m_telemetry_sample);
 
                 // First entry into any region
@@ -849,8 +870,7 @@ namespace geopm
                               std::pair<uint64_t, Region *> (map_id,
                                       new Region(m_region_id_all,
                                                  m_platform->num_control_domain(),
-                                                 level,
-                                                 m_sampler->tprof_table())));
+                                                 level)));
             it = tmp_it.first;
         }
         IRegion *curr_region = (*it).second;
@@ -872,7 +892,7 @@ namespace geopm
         }
         if (do_control &&
             !geopm_region_id_is_epoch(m_region_id_all) &&
-            m_decider[0]->update_policy(*curr_region, *curr_policy) == true) {
+            m_leaf_decider->update_policy(*curr_region, *curr_policy) == true) {
             m_platform->enforce_policy(m_region_id_all, *curr_policy);
         }
     }
@@ -967,27 +987,27 @@ namespace geopm
                << "\tignore-time (sec): " << m_ignore_agg_time << std::endl
                << "\tthrottle time (%): " << (double)m_throttle_count / (double)m_sample_count * 100.0 << std::endl;
 
+        std::ostringstream proc_path;
         char status_buffer[8192];
         status_buffer[8191] = '\0';
-        const char *proc_path = "/proc/self/status";
+        proc_path << "/proc/" << (int)getpid() <<  "/status";
 
-        int fd = open(proc_path, O_RDONLY);
+        int fd = open(proc_path.str().c_str(), O_RDONLY);
         if (fd == -1) {
-            throw Exception("Controller::generate_report(): Unable to open " + std::string(proc_path),
+            throw Exception("Controller::generate_report(): Unable to open " + proc_path.str(),
                             errno ? errno : GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
         }
 
         ssize_t num_read = read(fd, status_buffer, 8191);
         if (num_read == -1) {
-            (void)close(fd);
-            throw Exception("Controller::generate_report(): Unable to read " + std::string(proc_path),
+            throw Exception("Controller::generate_report(): Unable to read " + proc_path.str(),
                             errno ? errno : GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
         }
         status_buffer[num_read] = '\0';
 
         int err = close(fd);
         if (err) {
-            throw Exception("Controller::generate_report(): Unable to close " + std::string(proc_path),
+            throw Exception("Controller::generate_report(): Unable to close " + proc_path.str(),
                             errno ? errno : GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
         }
 

@@ -1,4 +1,13 @@
 /*
+ * Copyright 2017, 2018 Science and Technology Facilities Council (UK)
+ * IBM Confidential
+ * OCO Source Materials
+ * 5747-SM3
+ * (c) Copyright IBM Corp. 2017, 2018
+ * The source code for this program is not published or otherwise
+ * divested of its trade secrets, irrespective of what has
+ * been deposited with the U.S. Copyright Office.
+ *
  * Copyright (c) 2015, 2016, 2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,14 +42,20 @@
 #include <string>
 #include <sstream>
 #include <inttypes.h>
+
+#include "geopm_arch.h"
+#ifdef X86
 #include <cpuid.h>
+#endif
 
 #include "geopm_plugin.h"
 #include "Exception.hpp"
 #include "PlatformFactory.hpp"
 #include "RAPLPlatform.hpp"
+#include "OCCPlatform.hpp"
 #include "XeonPlatformImp.hpp"
 #include "KNLPlatformImp.hpp"
+#include "PowerPlatformImp.hpp"
 #include "config.h"
 
 
@@ -64,6 +79,9 @@ void geopm_factory_register(struct geopm_factory_c *factory, geopm::PlatformImp 
 
 int geopm_read_cpuid(void)
 {
+#ifdef POWERPC
+    return POWER9_PLATFORM_ID;
+#else
     uint32_t key = 1; //processor features
     uint32_t proc_info = 0;
     uint32_t model;
@@ -92,6 +110,7 @@ int geopm_read_cpuid(void)
     }
 
     return ((family << 8) + model);
+#endif
 }
 
 
@@ -103,12 +122,17 @@ namespace geopm
         // register all the platforms we know about
         geopm_plugin_load(GEOPM_PLUGIN_TYPE_PLATFORM, (struct geopm_factory_c *)this);
         geopm_plugin_load(GEOPM_PLUGIN_TYPE_PLATFORM_IMP, (struct geopm_factory_c *)this);
+#ifdef X86
         register_platform(std::unique_ptr<Platform>(new RAPLPlatform()));
         register_platform(std::unique_ptr<PlatformImp>(new SNBPlatformImp()));
         register_platform(std::unique_ptr<PlatformImp>(new IVTPlatformImp()));
         register_platform(std::unique_ptr<PlatformImp>(new HSXPlatformImp()));
         register_platform(std::unique_ptr<PlatformImp>(new BDXPlatformImp()));
         register_platform(std::unique_ptr<PlatformImp>(new KNLPlatformImp()));
+#elif defined(POWERPC)
+	register_platform(std::unique_ptr<Platform>(new OCCPlatform()));
+	register_platform(std::unique_ptr<PlatformImp>(new PowerPlatformImp()));
+#endif
     }
 
     PlatformFactory::PlatformFactory(std::unique_ptr<Platform> platform,

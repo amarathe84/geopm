@@ -1,4 +1,13 @@
 /*
+ * Copyright 2017, 2018 Science and Technology Facilities Council (UK)
+ * IBM Confidential
+ * OCO Source Materials
+ * 5747-SM3
+ * (c) Copyright IBM Corp. 2017, 2018
+ * The source code for this program is not published or otherwise
+ * divested of its trade secrets, irrespective of what has
+ * been deposited with the U.S. Copyright Office.
+ *
  * Copyright (c) 2015, 2016, 2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
@@ -46,81 +55,90 @@
 #include <fstream>
 #include <iomanip>
 
+#include "geopm_arch.h"
 #include "Exception.hpp"
 #include "PlatformImp.hpp"
 #include "config.h"
+
+#ifdef POWERPC
+#ifndef __NR_perf_event_open
+#define __NR_perf_event_open 319
+#endif
+#endif
 
 namespace geopm
 {
 
     PlatformImp::PlatformImp()
         : m_num_logical_cpu(0)
-        , m_num_hw_cpu(0)
-        , m_num_tile(0)
-        , m_num_tile_group(0)
-        , m_num_package(0)
-        , m_num_core_per_tile(0)
-        , m_control_latency_ms(10.0)
-        , m_tdp_pkg_watts(DBL_MIN)
-        , m_msr_batch_desc(-1)
-        , m_is_batch_enabled(false)
-        , m_batch({0, NULL})
-        , m_trigger_offset(0)
-        , m_trigger_value(0)
-        , m_is_initialized(false)
-        , M_MSR_SAVE_FILE_PATH("/tmp/geopm-msr-initial-vals-XXXXXX")
-    {
-
-    }
+          , m_num_hw_cpu(0)
+          , m_num_tile(0)
+          , m_num_tile_group(0)
+          , m_num_package(0)
+          , m_num_core_per_tile(0)
+          , m_control_latency_ms(10.0)
+          , m_tdp_pkg_watts(DBL_MIN)
+          , m_msr_batch_desc(-1)
+          , m_is_batch_enabled(false)
+          , m_batch({0, NULL})
+          , m_trigger_offset(0)
+          , m_trigger_value(0)
+          , m_is_initialized(false)
+          , M_MSR_SAVE_FILE_PATH("/tmp/geopm-msr-initial-vals-XXXXXX")
+          {
+              geopm_time(&begin_time);
+          }
 
     PlatformImp::PlatformImp(int num_energy_signal, int num_counter_signal, double control_latency, const std::map<std::string, std::pair<off_t, unsigned long> > *msr_map_ptr)
         : m_msr_map_ptr(msr_map_ptr)
-        , m_num_logical_cpu(0)
-        , m_num_hw_cpu(0)
-        , m_num_tile(0)
-        , m_num_tile_group(0)
-        , m_num_package(0)
-        , m_num_core_per_tile(0)
-        , m_num_energy_signal(num_energy_signal)
-        , m_num_counter_signal(num_counter_signal)
-        , m_control_latency_ms(control_latency)
-        , m_tdp_pkg_watts(DBL_MIN)
-        , m_msr_batch_desc(-1)
-        , m_is_batch_enabled(false)
-        , m_batch({0, NULL})
-        , m_trigger_offset(0)
-        , m_trigger_value(0)
-        , m_is_initialized(false)
-        , M_MSR_SAVE_FILE_PATH("/tmp/geopm-msr-initial-vals-XXXXXX")
-    {
-
-    }
+          , m_num_logical_cpu(0)
+          , m_num_hw_cpu(0)
+          , m_num_tile(0)
+          , m_num_tile_group(0)
+          , m_num_package(0)
+          , m_num_core_per_tile(0)
+          , m_num_energy_signal(num_energy_signal)
+          , m_num_counter_signal(num_counter_signal)
+          , m_control_latency_ms(control_latency)
+          , m_tdp_pkg_watts(DBL_MIN)
+          , m_msr_batch_desc(-1)
+          , m_is_batch_enabled(false)
+          , m_batch({0, NULL})
+              , m_trigger_offset(0)
+              , m_trigger_value(0)
+              , m_is_initialized(false)
+              , M_MSR_SAVE_FILE_PATH("/tmp/geopm-msr-initial-vals-XXXXXX")
+              {
+                  geopm_time(&begin_time);
+              }
 
     PlatformImp::PlatformImp(const PlatformImp &other)
         : m_topology(other.m_topology)
-        , m_cpu_file_desc(other.m_cpu_file_desc)
-        , m_msr_map_ptr(other.m_msr_map_ptr)
-        , m_num_logical_cpu(other.m_num_logical_cpu)
-        , m_num_hw_cpu(other.m_num_hw_cpu)
-        , m_num_cpu_per_core(other.m_num_cpu_per_core)
-        , m_num_tile(other.m_num_tile)
-        , m_num_tile_group(other.m_num_tile_group)
-        , m_num_package(other.m_num_package)
-        , m_num_core_per_tile(other.m_num_core_per_tile)
-        , m_num_energy_signal(other.m_num_energy_signal)
-        , m_num_counter_signal(other.m_num_counter_signal)
-        , m_control_latency_ms(other.m_control_latency_ms)
-        , m_tdp_pkg_watts(other.m_tdp_pkg_watts)
-        , m_msr_value_last(other.m_msr_value_last)
-        , m_msr_overflow_offset(other.m_msr_overflow_offset)
-        , m_msr_batch_desc(other.m_msr_batch_desc)
-        , m_is_batch_enabled(other.m_is_batch_enabled)
-        , m_batch(other.m_batch)
-        , m_trigger_offset(other.m_trigger_offset)
-        , m_trigger_value(other.m_trigger_value)
-        , m_msr_save_file_path(other.m_msr_save_file_path)
-        , m_is_initialized(other.m_is_initialized)
-        , M_MSR_SAVE_FILE_PATH(other.M_MSR_SAVE_FILE_PATH)
+          , m_cpu_file_desc(other.m_cpu_file_desc)
+          , m_msr_map_ptr(other.m_msr_map_ptr)
+          , m_num_logical_cpu(other.m_num_logical_cpu)
+          , m_num_hw_cpu(other.m_num_hw_cpu)
+          , m_num_cpu_per_core(other.m_num_cpu_per_core)
+          , m_num_tile(other.m_num_tile)
+          , m_num_tile_group(other.m_num_tile_group)
+          , m_num_package(other.m_num_package)
+          , m_num_core_per_tile(other.m_num_core_per_tile)
+          , m_num_energy_signal(other.m_num_energy_signal)
+          , m_num_counter_signal(other.m_num_counter_signal)
+          , m_control_latency_ms(other.m_control_latency_ms)
+          , m_tdp_pkg_watts(other.m_tdp_pkg_watts)
+          , m_msr_value_last(other.m_msr_value_last)
+          , m_msr_overflow_offset(other.m_msr_overflow_offset)
+          , m_msr_batch_desc(other.m_msr_batch_desc)
+          , m_is_batch_enabled(other.m_is_batch_enabled)
+          , m_batch(other.m_batch)
+          , m_trigger_offset(other.m_trigger_offset)
+          , m_trigger_value(other.m_trigger_value)
+          , begin_time(other.begin_time)
+          , end_time(other.end_time)
+          , m_msr_save_file_path(other.m_msr_save_file_path)
+          , m_is_initialized(other.m_is_initialized)
+          , M_MSR_SAVE_FILE_PATH(other.M_MSR_SAVE_FILE_PATH)
     {
         // Copy C string for m_msr_path
         m_msr_path[NAME_MAX - 1] = '\0';
@@ -143,20 +161,35 @@ namespace geopm
         }
 
         remove(m_msr_save_file_path.c_str());
+
+#ifdef POWERPC
+        for(std::vector<int>::iterator it = m_cpu_other_file_desc.begin();
+                it != m_cpu_other_file_desc.end();
+                ++it) {
+            close(*it);
+            *it = -1;
+        }
+
+#endif
     }
 
     void PlatformImp::initialize()
     {
         if (!m_is_initialized) {
             parse_hw_topology();
+
+#ifdef X86
             for (int i = 0; i < m_num_logical_cpu; i++) {
                 msr_open(i);
             }
             save_msr_state(M_MSR_SAVE_FILE_PATH.c_str());
+#endif
             msr_initialize();
             m_is_initialized = true;
         }
     }
+
+
 
     int PlatformImp::num_package(void) const
     {
@@ -260,7 +293,7 @@ namespace geopm
         if (value != old_value) {
             std::ostringstream message;
             message << "MSR value to be written was modified by the mask! Desired = 0x" << std::hex << old_value
-                    << " After mask = 0x" << std::hex << value;
+                << " After mask = 0x" << std::hex << value;
             throw Exception(message.str(), GEOPM_ERROR_MSR_WRITE, __FILE__, __LINE__);
         }
 
@@ -310,6 +343,30 @@ namespace geopm
         }
     }
 
+#ifdef POWERPC
+    size_t PlatformImp::pf_event_read_data_size() {
+        /* Structure for reading since we are using FORMAT_GROUP is
+         *
+         * struct read_format {
+         *   uint64_t nr; -> number of counters 
+         *   uint64_t values[nr]; -> values of each counter
+         * }
+         */
+
+        /* number of counters can be retrieved from msr_size */
+        return sizeof(uint64_t) * (msr_size() + 1);
+
+    }      
+
+    void PlatformImp::pf_event_read(int cpu) {
+        int rv = read(m_cpu_file_desc[cpu], m_pf_event_read_data[cpu], pf_event_read_data_size());
+
+        if (rv < 0) {
+            throw Exception("failed to read performance counters", GEOPM_ERROR_MSR_READ, __FILE__, __LINE__);
+        }
+    }
+#endif
+
     off_t PlatformImp::msr_offset(std::string msr_name)
     {
         auto it = m_msr_map_ptr->find(msr_name);
@@ -326,6 +383,24 @@ namespace geopm
             throw Exception("MSR string not found in offset map", GEOPM_ERROR_INVALID, __FILE__, __LINE__);
         }
         return (*it).second.second;
+    }
+
+    off_t PlatformImp::msr_offset(int idx) {
+        int i = 0;
+        for(auto it = m_msr_map_ptr->begin(); it != m_msr_map_ptr->end(); ++it) {
+            if(i == idx)
+                return (*it).second.first;
+
+            ++i;
+        }
+
+        char error_string[NAME_MAX];
+        snprintf(error_string, NAME_MAX, "Index %d is out of bounds as map has only %d elements", idx, (i+1));
+        throw Exception(error_string, GEOPM_ERROR_INVALID, __FILE__, __LINE__);
+    }
+
+    size_t PlatformImp::msr_size(void) {
+        return m_msr_map_ptr->size();
     }
 
     void PlatformImp::msr_path(int cpu_num)
@@ -355,6 +430,7 @@ namespace geopm
         throw Exception("checked /dev/cpu/0/msr and /dev/cpu/0/msr_safe", GEOPM_ERROR_MSR_OPEN, __FILE__, __LINE__);
     }
 
+#ifdef X86
     void PlatformImp::msr_open(int cpu)
     {
         int fd;
@@ -363,15 +439,15 @@ namespace geopm
         fd = open(m_msr_path, O_RDWR);
         //report errors
         if (fd < 0) {
-            char error_string[2 * NAME_MAX];
+            char error_string[NAME_MAX];
             if (errno == ENXIO || errno == ENOENT) {
-                snprintf(error_string, 2 * NAME_MAX, "device %s does not exist", m_msr_path);
+                snprintf(error_string, NAME_MAX, "device %s does not exist", m_msr_path);
             }
             else if (errno == EPERM || errno == EACCES) {
-                snprintf(error_string, 2 * NAME_MAX, "permission denied opening device %s", m_msr_path);
+                snprintf(error_string, NAME_MAX, "permission denied opening device %s", m_msr_path);
             }
             else {
-                snprintf(error_string, 2 * NAME_MAX, "system error opening cpu device %s", m_msr_path);
+                snprintf(error_string, NAME_MAX, "system error opening cpu device %s", m_msr_path);
             }
             throw Exception(error_string, GEOPM_ERROR_MSR_OPEN, __FILE__, __LINE__);
 
@@ -380,11 +456,53 @@ namespace geopm
         //all is good, save handle
         m_cpu_file_desc.push_back(fd);
     }
+#elif defined(POWERPC)
+    int PlatformImp::perf_event_open(struct perf_event_attr *attr, pid_t pid, int cpu, int group_fd, unsigned long flags)
+    {
+        return (syscall(__NR_perf_event_open, attr, pid, cpu, group_fd, flags));
+    }    
+
+    void PlatformImp::pf_event_open(int cpu) 
+    {
+        size_t counters = msr_size();
+        int *fds = (int*) calloc(counters, sizeof(int));
+        fds[0] = -1;
+
+        for(size_t i = 0; i < counters; ++i) {
+            perf_event_attr perf_attr;
+
+            memset(&perf_attr, 0, sizeof(struct perf_event_attr));
+
+            perf_attr.type = 0x4; 
+            perf_attr.size = sizeof(struct perf_event_attr);
+            perf_attr.config = msr_offset(i);
+            if(i == 0)
+                perf_attr.disabled = 1;
+
+            //perf_attr.pinned = i == 0 ? 1 : 0;
+            perf_attr.read_format = PERF_FORMAT_GROUP;
+
+            fds[i] = perf_event_open(&perf_attr, -1, cpu, fds[0], 0);
+            if(fds[i] < 0) {
+                char error_string[NAME_MAX];
+                snprintf(error_string, NAME_MAX, "failed to open counter %lu on CPU %d", i, cpu);
+                throw Exception(error_string, GEOPM_ERROR_MSR_OPEN, __FILE__, __LINE__);
+            }
+
+            if(i > 0)
+                m_cpu_other_file_desc.push_back(fds[i]);
+        }
+
+        m_cpu_file_desc.push_back(fds[0]);
+
+        free(fds);
+    }
+#endif
 
     void PlatformImp::msr_close(int cpu)
     {
         if (m_cpu_file_desc.size() > (size_t)cpu &&
-            m_cpu_file_desc[cpu] >= 0) {
+                m_cpu_file_desc[cpu] >= 0) {
             int rv = close(m_cpu_file_desc[cpu]);
             //mark as invalid
             m_cpu_file_desc[cpu] = -1;

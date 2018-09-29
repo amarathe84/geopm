@@ -1,4 +1,13 @@
 /*
+ * Copyright 2017, 2018 Science and Technology Facilities Council (UK)
+ * IBM Confidential
+ * OCO Source Materials
+ * 5747-SM3
+ * (c) Copyright IBM Corp. 2017, 2018
+ * The source code for this program is not published or otherwise
+ * divested of its trade secrets, irrespective of what has
+ * been deposited with the U.S. Copyright Office.
+ *
  * Copyright (c) 2015, 2016, 2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
@@ -43,6 +52,7 @@
 #include <system_error>
 #include <unistd.h>
 
+#include "geopm_arch.h"
 #include "geopm_policy.h"
 #include "Exception.hpp"
 #include "GlobalPolicy.hpp"
@@ -319,7 +329,11 @@ namespace geopm
         ,m_flags(NULL)
         ,m_tree_decider("none")
         ,m_leaf_decider("none")
+#ifdef POWERPC
+	,m_platform("occ")
+#else
         ,m_platform("rapl")
+#endif
         ,m_is_shm_in(false)
         ,m_is_shm_out(false)
         ,m_do_read(false)
