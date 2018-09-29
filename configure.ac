@@ -1,3 +1,12 @@
+#  Copyright 2017, 2018 Science and Technology Facilities Council (UK)
+#  IBM Confidential
+#  OCO Source Materials
+#  5747-SM3
+#  (c) Copyright IBM Corp. 2017, 2018
+#  The source code for this program is not published or otherwise
+#  divested of its trade secrets, irrespective of what has
+#  been deposited with the U.S. Copyright Office.
+#
 #  Copyright (c) 2015, 2016, 2017, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
@@ -130,17 +139,6 @@ fi
 [enable_overhead="0"]
 )
 
-AC_ARG_ENABLE([procfs],
-  [AS_HELP_STRING([--disable-procfs], [Disable use of procfs for use on operating systems other than standard Linux])],
-[if test "x$enable_procfs" = "xno" ; then
-  enable_procfs="0"
-else
-  enable_procfs="1"
-fi
-],
-[enable_procfs="1"]
-)
-
 if test "x$enable_openmp" = "xno" ; then
   enable_openmp="0"
 else
@@ -167,11 +165,6 @@ if test "x$enable_overhead" = "x1" ; then
   AC_DEFINE([GEOPM_OVERHEAD], [ ], [Enables code for measuring overhead])
 fi
 AC_SUBST([enable_overhead])
-
-if test "x$enable_procfs" = "x1" ; then
-  AC_DEFINE([GEOPM_PROCFS], [ ], [Enables use of procfs for process CPU affinity])
-fi
-AC_SUBST([enable_procfs])
 
 
 AC_SUBST([enable_openmp])
@@ -281,9 +274,15 @@ if test "x$enable_fortran" = "x1"; then
 fi
 fi
 
+AC_LANG_PUSH([C])
+AC_OPENMP()
+AC_LANG_POP([C])
 AC_LANG_PUSH([C++])
 AC_OPENMP()
 AC_LANG_POP([C++])
+AC_LANG_PUSH([Fortran])
+AC_OPENMP()
+AC_LANG_POP([Fortran])
 
 
 [MPI_FCFLAGS=$MPI_FFLAGS]
@@ -332,11 +331,16 @@ AC_SUBST([MPI_LIBS])
 AC_SUBST([MPI_FCLIBS])
 AC_SUBST([MPI_FLIBS])
 
-[EXTRA_CFLAGS="$EXTRA_CFLAGS $OPENMP_CXXFLAGS -std=c99 -msse4.2"]
-[EXTRA_CXXFLAGS="$EXTRA_CXXFLAGS $OPENMP_CXXFLAGS -std=c++11 -msse4.2"]
-[EXTRA_FFLAGS="$EXTRA_FFLAGS $OPENMP_CXXFLAGS -msse4.2"]
-[EXTRA_FCFLAGS="$EXTRA_FCFLAGS $OPENMP_CXXFLAGS -msse4.2"]
-[EXTRA_LDFLAGS="$EXTRA_LDFLAGS $OPENMP_CXXFLAGS"]
+[EXTRA_CFLAGS="$EXTRA_CFLAGS $OPENMP_CFLAGS -std=c99 -maltivec"]
+[EXTRA_CXXFLAGS="$EXTRA_CXXFLAGS $OPENMP_CXXFLAGS -std=c++11 -maltivec"]
+[EXTRA_FFLAGS="$EXTRA_FFLAGS $OPENMP_FFLAGS -maltivec"]
+[EXTRA_FCFLAGS="$EXTRA_FCFLAGS $OPENMP_FCFLAGS -maltivec"]
+#[EXTRA_CFLAGS="$EXTRA_CFLAGS $OPENMP_CFLAGS -std=c99 -qaltivec"]
+#[EXTRA_CXXFLAGS="$EXTRA_CXXFLAGS $OPENMP_CXXFLAGS -std=c++11 -qaltivec"]
+#[EXTRA_FFLAGS="$EXTRA_FFLAGS $OPENMP_FFLAGS -qaltivec"]
+#[EXTRA_FCFLAGS="$EXTRA_FCFLAGS $OPENMP_FCFLAGS -qaltivec"]
+
+[EXTRA_LDFLAGS="$EXTRA_LDFLAGS"]
 
 
 [LDFLAGS_SAVE="$LDFLAGS"]
@@ -364,6 +368,7 @@ AC_PROG_F77
 fi
 AC_PROG_MAKE_SET
 m4_pattern_allow([AM_PROG_AR])
+AM_PROG_AS
 AM_PROG_AR
 AM_PROG_CC_C_O
 LT_INIT
@@ -463,7 +468,7 @@ AC_COMPILE_IFELSE([
     AC_MSG_RESULT(no)
 ])
 
-AM_CONDITIONAL([HAVE_GFORTRAN], [test ! -z "$FC" && $FC --version | grep "GNU Fortran" > /dev/null])
+AM_CONDITIONAL([HAVE_GFORTRAN], [test ! -z "$FC" && $FC --version | grep GCC > /dev/null])
 AM_CONDITIONAL([HAVE_IFORT], [test ! -z "$FC" && $FC --version | grep ifort > /dev/null])
 AM_CONDITIONAL([HAVE_ICC], [test ! -z "$CC" && $CC --version | grep icc > /dev/null])
 AM_CONDITIONAL([HAVE_ICPC], [test ! -z "$CXX" && $CXX --version | grep icpc > /dev/null])
@@ -478,12 +483,10 @@ AC_COMPILE_IFELSE([
     AC_DEFINE([GEOPM_MPI_CONST], [const], [MPI interfaces use const qualifier.])
     AC_DEFINE([GEOPM_MPI_CONST_CAST(t)], [], [MPI interfaces use const qualifier.])
     AC_DEFINE([GEOPM_ENABLE_MPI3], [], [MPI-3 support enabled.])
-    AM_CONDITIONAL([GEOPM_ENABLE_MPI3], [true])
 ],[
     AC_MSG_RESULT(no)
     AC_DEFINE([GEOPM_MPI_CONST], [], [MPI interfaces do not use const qualifier.])
     AC_DEFINE([GEOPM_MPI_CONST_CAST(t)], [const_cast<t>], [MPI interfaces do not use const qualifier.])
-    AM_CONDITIONAL([GEOPM_ENABLE_MPI3], [false])
 ])
 
 [CFLAGS="$CFLAGS -Wall -Werror -fno-delete-null-pointer-checks"]
@@ -506,7 +509,7 @@ AC_COMPILE_IFELSE([
 
 [EXTRA_CFLAGS="$EXTRA_CFLAGS -Wall -Werror"]
 [EXTRA_CXXFLAGS="$EXTRA_CXXFLAGS -Wall -Werror"]
-if test ! -z "$FC" && $FC --version | grep "GNU Fortran" > /dev/null; then
+if test ! -z "$FC" && $FC --version | grep GCC > /dev/null; then
 [EXTRA_FFLAGS="$EXTRA_FFLAGS -fno-range-check"]
 [EXTRA_FCFLAGS="$EXTRA_FCFLAGS -fno-range-check"]
 else
@@ -531,7 +534,7 @@ AC_SUBST([AM_LDFLAGS])
 AC_SUBST_FILE([CHANGELOG])
 CHANGELOG=ChangeLog
 
-AC_CONFIG_FILES([Makefile geopm.spec geopm-ohpc.spec scripts/geopmpy/version.py])
+AC_CONFIG_FILES([Makefile geopm.spec])
 AC_OUTPUT
 
 # ============================================================================

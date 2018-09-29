@@ -1,3 +1,12 @@
+#  Copyright 2017, 2018 Science and Technology Facilities Council (UK)
+#  IBM Confidential
+#  OCO Source Materials
+#  5747-SM3
+#  (c) Copyright IBM Corp. 2017, 2018
+#  The source code for this program is not published or otherwise
+#  divested of its trade secrets, irrespective of what has
+#  been deposited with the U.S. Copyright Office.
+#
 #  Copyright (c) 2015, 2016, 2017, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
@@ -58,8 +67,8 @@ dist: dist-googletest dist-openmp
 
 
 include_HEADERS = src/geopm.h \
-                  src/geopm_ctl.h \
                   src/geopm_error.h \
+                  src/geopm_mpi_pcontrol.h \
                   src/geopm_policy.h \
                   src/geopm_message.h \
                   src/geopm_version.h \
@@ -85,7 +94,7 @@ ronn_man = man/geopm.7 \
            man/geopm_fortran.3 \
            man/geopmpy.7 \
            man/geopmpy_launcher.1 \
-           man/geopm_sched.3 \
+           man/geopm_omp.3 \
            man/geopmplotter.1 \
            man/geopmpolicy.1 \
            man/geopm_policy_c.3 \
@@ -123,8 +132,6 @@ EXTRA_DIST = .gitignore \
              copying_headers/test-license \
              copying_headers/test-dist \
              dox/Doxyfile \
-             geopm-ohpc.spec.in \
-             geopm-ohpc.spec \
              geopm.spec.in \
              geopm.spec \
              Makefile.am \
@@ -137,7 +144,7 @@ EXTRA_DIST = .gitignore \
              ronn/geopm_error.3.ronn \
              ronn/geopm_fortran.3.ronn \
              ronn/geopmpy_launcher.1.ronn \
-             ronn/geopm_sched.3.ronn \
+             ronn/geopm_omp.3.ronn \
              ronn/geopmplotter.1.ronn \
              ronn/geopmpolicy.1.ronn \
              ronn/geopm_policy_c.3.ronn \
@@ -150,11 +157,6 @@ EXTRA_DIST = .gitignore \
              TODO \
              tracker/track \
              $(TUTORIAL_DIST) \
-             test_hw/geopm_time.h \
-             test_hw/Makefile \
-             test_hw/rapl_pkg_limit_test.c \
-             test_hw/rapl_pkg_limit_plot.py \
-             test_hw/rapl_pkg_limit_sweep.sh \
              geopm-tutorial.tar.gz \
              # end
 
@@ -194,7 +196,7 @@ TUTORIAL_DIST = tutorial/Imbalancer.cpp \
 if ENABLE_MPI
     libgeopm_la_LDFLAGS = $(AM_LDFLAGS) $(MPI_LDFLAGS) -version-info $(geopm_abi_version)
     libgeopm_la_CFLAGS = $(AM_CFLAGS) $(MPI_CFLAGS)
-    libgeopm_la_CXXFLAGS = $(AM_CXXFLAGS) $(MPI_CFLAGS)
+    libgeopm_la_CXXFLAGS= $(AM_CXXFLAGS) $(MPI_CFLAGS)
 
     geopmctl_LDFLAGS = $(AM_LDFLAGS) $(MPI_LDFLAGS)
     geopmctl_CFLAGS = $(AM_CFLAGS) $(MPI_CFLAGS)
@@ -222,10 +224,6 @@ endif
 
 # SOURCE LISTS FOR EACH TARGET
 libgeopmpolicy_la_SOURCES = src/CircularBuffer.hpp \
-                            src/ControlMessage.cpp \
-                            src/ControlMessage.hpp \
-                            src/Comm.hpp \
-                            src/Comm.cpp \
                             src/Decider.cpp \
                             src/Decider.hpp \
                             src/DeciderFactory.cpp \
@@ -237,19 +235,12 @@ libgeopmpolicy_la_SOURCES = src/CircularBuffer.hpp \
                             src/GlobalPolicy.hpp \
                             src/KNLPlatformImp.cpp \
                             src/KNLPlatformImp.hpp \
-                            src/OMPT.cpp \
-                            src/OMPT.hpp \
-                            src/MSR.cpp \
-                            src/MSR.hpp \
-                            src/MSRIO.cpp \
-                            src/MSRIO.hpp \
+                            src/PowerPlatformImp.cpp \
+                            src/PowerPlatformImp.hpp \
                             src/PlatformImp.cpp \
                             src/PlatformImp.hpp \
                             src/Platform.cpp \
                             src/Platform.hpp \
-                            src/PlatformIO.cpp \
-                            src/PlatformIO.hpp \
-                            src/PlatformIOInternal.hpp \
                             src/PlatformFactory.cpp \
                             src/PlatformFactory.hpp \
                             src/PlatformTopology.cpp \
@@ -260,10 +251,10 @@ libgeopmpolicy_la_SOURCES = src/CircularBuffer.hpp \
                             src/PolicyFlags.hpp \
                             src/ProfileTable.cpp \
                             src/ProfileTable.hpp \
-                            src/ProfileThread.cpp \
-                            src/ProfileThread.hpp \
                             src/RAPLPlatform.cpp \
                             src/RAPLPlatform.hpp \
+			    src/OCCPlatform.cpp \
+			    src/OCCPlatform.hpp \
                             src/Region.cpp \
                             src/Region.hpp \
                             src/SampleRegulator.cpp \
@@ -275,25 +266,26 @@ libgeopmpolicy_la_SOURCES = src/CircularBuffer.hpp \
                             src/SignalHandler.cpp \
                             src/StaticPolicyDecider.cpp \
                             src/StaticPolicyDecider.hpp \
-                            src/TimeSignal.cpp \
-                            src/TimeSignal.hpp \
                             src/Tracer.cpp \
                             src/Tracer.hpp \
                             src/XeonPlatformImp.cpp \
                             src/XeonPlatformImp.hpp \
-                            src/geopm.h \
-                            src/geopm_ctl.h \
                             src/geopm_env.h \
                             src/geopm_error.h \
+                            src/crc32.S \
+                            src/crc32_wrapper.c \
+                            src/crc32_constants.h \
+                            src/ppc-opcode.h \
                             src/geopm_hash.c \
                             src/geopm_hash.h \
                             src/geopm_message.c \
                             src/geopm_message.h \
+                            src/geopm_omp.c \
+                            src/geopm_omp.h \
                             src/geopm_plugin.c \
                             src/geopm_plugin.h \
                             src/geopm_policy.h \
                             src/geopm_time.h \
-                            src/geopm_sched.c \
                             src/geopm_sched.h \
                             src/geopm_signal_handler.h \
                             src/geopm_version.c \
@@ -311,10 +303,6 @@ if ENABLE_MPI
     libgeopm_la_SOURCES = src/CircularBuffer.hpp \
                           src/Controller.cpp \
                           src/Controller.hpp \
-                          src/ControlMessage.cpp \
-                          src/ControlMessage.hpp \
-                          src/Comm.hpp \
-                          src/Comm.cpp \
                           src/Decider.cpp \
                           src/Decider.hpp \
                           src/DeciderFactory.cpp \
@@ -326,16 +314,11 @@ if ENABLE_MPI
                           src/GlobalPolicy.hpp \
                           src/KNLPlatformImp.cpp \
                           src/KNLPlatformImp.hpp \
-                          src/MSR.cpp \
-                          src/MSR.hpp \
-                          src/MSRIO.cpp \
-                          src/MSRIO.hpp \
+                          src/PowerPlatformImp.cpp \
+                          src/PowerPlatformImp.hpp \
                           src/OMPT.cpp \
                           src/OMPT.hpp \
                           src/Platform.cpp \
-                          src/PlatformIO.cpp \
-                          src/PlatformIO.hpp \
-                          src/PlatformIOInternal.hpp \
                           src/PlatformFactory.cpp \
                           src/PlatformFactory.hpp \
                           src/Platform.hpp \
@@ -355,6 +338,8 @@ if ENABLE_MPI
                           src/ProfileThread.hpp \
                           src/RAPLPlatform.cpp \
                           src/RAPLPlatform.hpp \
+			  src/OCCPlatform.cpp \
+			  src/OCCPlatform.hpp \
                           src/Region.cpp \
                           src/Region.hpp \
                           src/SampleRegulator.cpp \
@@ -366,8 +351,6 @@ if ENABLE_MPI
                           src/SignalHandler.cpp \
                           src/StaticPolicyDecider.cpp \
                           src/StaticPolicyDecider.hpp \
-                          src/TimeSignal.cpp \
-                          src/TimeSignal.hpp \
                           src/Tracer.cpp \
                           src/Tracer.hpp \
                           src/geopm_env.h \
@@ -375,21 +358,24 @@ if ENABLE_MPI
                           src/TreeCommunicator.hpp \
                           src/XeonPlatformImp.cpp \
                           src/XeonPlatformImp.hpp \
-                          src/geopm.h \
-                          src/geopm_ctl.h \
-                          src/geopm_mpi_comm_split.h \
-                          src/MPICommSplit.cpp \
+                          src/geopm_ctl_spawn.c \
                           src/geopm_error.h \
+                          src/crc32.S \
+                          src/crc32_wrapper.c \
+                          src/crc32_constants.h \
+                          src/ppc-opcode.h \
                           src/geopm_hash.c \
                           src/geopm_hash.h \
+                          src/geopm_omp.c \
+                          src/geopm_omp.h \
                           src/geopm_message.c \
                           src/geopm_message.h \
+                          src/geopm_mpi_pcontrol.h \
                           src/geopm_plugin.c \
                           src/geopm_plugin.h \
                           src/geopm_pmpi.h \
                           src/geopm_pmpi.c \
                           src/geopm_signal_handler.h \
-                          src/geopm_sched.c \
                           src/geopm_sched.h \
                           src/geopm_time.h \
                           src/geopm_version.c \
@@ -492,13 +478,13 @@ endif
 
 man/geopmsrun.1: man/geopmpy_launcher.1
 	cp $^ $@
-	if [ -f ronn/geopmpy_launcher.1.html ]; then cp ronn/geopmpy_launcher.1.html ronn/geopmsrun.1.html; fi
+	cp ronn/geopmpy_launcher.1.html ronn/geopmsrun.1.html
 
 man/geopmaprun.1: man/geopmpy_launcher.1
 	cp $^ $@
-	if [ -f ronn/geopmpy_launcher.1.html ]; then cp ronn/geopmpy_launcher.1.html ronn/geopmaprun.1.html; fi
+	cp ronn/geopmpy_launcher.1.html ronn/geopmaprun.1.html
 
-checkprogs: gtest-checkprogs pytest-checkprogs $(check_PROGRAMS) $(check_LTLIBRARIES)
+checkprogs: fortran-checkprogs gtest-checkprogs pytest-checkprogs $(check_PROGRAMS) $(check_LTLIBRARIES)
 
 # INCLUDES
 check_PROGRAMS =
