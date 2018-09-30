@@ -1,4 +1,13 @@
 /*
+ * Copyright 2017, 2018 Science and Technology Facilities Council (UK)
+ * IBM Confidential
+ * OCO Source Materials
+ * 5747-SM3
+ * (c) Copyright IBM Corp. 2017, 2018
+ * The source code for this program is not published or otherwise
+ * divested of its trade secrets, irrespective of what has
+ * been deposited with the U.S. Copyright Office.
+ *
  * Copyright (c) 2015, 2016, 2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,7 +42,9 @@
 #include <set>
 #include <string>
 #include <inttypes.h>
+#ifdef X86
 #include <cpuid.h>
+#endif
 #include <iostream>
 #include <fstream>
 #include <math.h>
@@ -129,7 +140,9 @@ namespace geopm
         m_imp = platform_imp;
         if (do_initialize) {
             m_imp->initialize();
+            printf("Platform.cpp:mp->initialize() -- end\n");
             initialize();
+            printf("Platform.cpp:set_implementation -- end\n");
         }
     }
 

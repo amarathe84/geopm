@@ -56,7 +56,6 @@ namespace geopm
             Environment();
             virtual ~Environment();
             const char *report(void) const;
-            const char *comm(void) const;
             const char *policy(void) const;
             const char *shmkey(void) const;
             const char *trace(void) const;
@@ -74,7 +73,6 @@ namespace geopm
             bool get_env(const char *name, std::string &env_string) const;
             bool get_env(const char *name, int &value) const;
             std::string m_report;
-            std::string m_comm;
             std::string m_policy;
             std::string m_shmkey;
             std::string m_trace;
@@ -98,9 +96,8 @@ namespace geopm
 
     Environment::Environment()
         : m_report("")
-        , m_comm("MPIComm")
         , m_policy("")
-        , m_shmkey("/geopm-shm-" + std::to_string(geteuid()))
+        , m_shmkey("/geopm-shm")
         , m_trace("")
         , m_plugin_path("")
         , m_profile("")
@@ -116,12 +113,9 @@ namespace geopm
         std::string tmp_str("");
 
         (void)get_env("GEOPM_REPORT", m_report);
-        (void)get_env("GEOPM_COMM", m_comm);
         (void)get_env("GEOPM_POLICY", m_policy);
         (void)get_env("GEOPM_SHMKEY", m_shmkey);
-        if (m_shmkey[0] != '/') {
-            m_shmkey = "/" + m_shmkey;
-        }
+        m_shmkey += "-" + std::to_string(geteuid());
         m_do_trace = get_env("GEOPM_TRACE", m_trace);
         (void)get_env("GEOPM_PLUGIN_PATH", m_plugin_path);
         if (!get_env("GEOPM_REPORT_VERBOSITY", m_report_verbosity) && m_report.size()) {
@@ -190,11 +184,6 @@ namespace geopm
     const char *Environment::report(void) const
     {
         return m_report.c_str();
-    }
-
-    const char *Environment::comm(void) const
-    {
-        return m_comm.c_str();
     }
 
     const char *Environment::policy(void) const
@@ -288,11 +277,6 @@ extern "C"
     const char *geopm_env_report(void)
     {
         return geopm::environment().report();
-    }
-
-    const char *geopm_env_comm(void)
-    {
-        return geopm::environment().comm();
     }
 
     const char *geopm_env_profile(void)

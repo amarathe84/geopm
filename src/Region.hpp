@@ -39,7 +39,6 @@
 
 #include "Policy.hpp"
 #include "CircularBuffer.hpp"
-#include "ProfileThread.hpp"
 
 namespace geopm
 {
@@ -76,12 +75,9 @@ namespace geopm
             /// @brief Retrieve the unique region identifier.
             /// @return 64 bit region identifier.
             virtual uint64_t identifier(void) const = 0;
-            /// @brief Retrieve the region hint.
-            /// @return Hint based on geopm_region_hint_e enums.
-            virtual uint64_t hint(void) const = 0;
             /// @brief Add increment amount to the total time spent in MPI calls
-            /// during this region.
-            /// @param [in] mpi_increment_amout Value to add to the MPI time total.
+            //  during this region.
+            //  @param [in] mpi_increment_amout Value to add to the MPI time total.
             virtual void increment_mpi_time(double mpi_increment_amount) = 0;
             /// @brief Return an aggregated sample to send up the tree.
             /// Called once this region has converged to send a sample
@@ -221,7 +217,6 @@ namespace geopm
             ///
             virtual double integral(int domain_idx, int signal_type, double &delta_time, double &integral) const = 0;
             virtual void report(std::ostringstream &string_stream, const std::string &name, int rank_per_node) const = 0;
-            virtual void thread_progress(std::vector<double> &progress) = 0;
     };
 
     class Region : public IRegion
@@ -236,7 +231,7 @@ namespace geopm
             /// @brief Default constructor.
             /// @param [in] identifier Unique 64 bit region identifier.
             /// @param [in] num_domain Number of control domains.
-            Region(uint64_t identifier, int num_domain, int level, IProfileThreadTable *tprof_table);
+            Region(uint64_t identifier, int num_domain, int level);
             /// @brief Default destructor.
             virtual ~Region();
             void entry(void);
@@ -245,7 +240,6 @@ namespace geopm
             void insert(const std::vector<struct geopm_sample_message_s> &sample);
             void clear(void);
             uint64_t identifier(void) const;
-            uint64_t hint(void) const;
             void increment_mpi_time(double mpi_increment_amount);
             void sample_message(struct geopm_sample_message_s &sample);
             double signal(int domain_idx, int signal_type);
@@ -258,7 +252,6 @@ namespace geopm
             double derivative(int domain_idx, int signal_type);
             double integral(int domain_idx, int signal_type, double &delta_time, double &integral) const;
             void report(std::ostringstream &string_stream, const std::string &name, int rank_per_node) const;
-            void thread_progress(std::vector<double> &progress);
         protected:
             /// @brief Bound testing of input parameters.
             ///
@@ -325,7 +318,6 @@ namespace geopm
             std::vector<bool> m_is_entered;
             int m_derivative_num_fit;
             double m_mpi_time;
-            IProfileThreadTable *m_tprof_table;
     };
 }
 

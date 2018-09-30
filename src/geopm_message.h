@@ -1,4 +1,13 @@
 /*
+ * Copyright 2017, 2018 Science and Technology Facilities Council (UK)
+ * IBM Confidential
+ * OCO Source Materials
+ * 5747-SM3
+ * (c) Copyright IBM Corp. 2017, 2018
+ * The source code for this program is not published or otherwise
+ * divested of its trade secrets, irrespective of what has
+ * been deposited with the U.S. Copyright Office.
+ *
  * Copyright (c) 2015, 2016, 2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
@@ -118,6 +127,7 @@ enum geopm_telemetry_type_e {
     GEOPM_TELEMETRY_TYPE_CLK_UNHALTED_CORE,
     GEOPM_TELEMETRY_TYPE_CLK_UNHALTED_REF,
     GEOPM_TELEMETRY_TYPE_READ_BANDWIDTH,
+    GEOPM_TELEMETRY_TYPE_GPU_ENERGY,
     GEOPM_TELEMETRY_TYPE_PROGRESS,
     GEOPM_TELEMETRY_TYPE_RUNTIME,
     GEOPM_NUM_TELEMETRY_TYPE // Signal counter, must be last

@@ -48,10 +48,137 @@
 #include "TreeCommunicator.hpp"
 #include "GlobalPolicy.hpp"
 #include "SharedMemory.hpp"
-#include "geopm_ctl.h"
 #include "geopm_message.h"
 #include "geopm_env.h"
 #include "config.h"
+
+extern "C"
+{
+    static int geopm_comm_split_imp(MPI_Comm comm, const char *tag, int *num_node, MPI_Comm *split_comm, int *is_ctl_comm);
+
+    int geopm_comm_split_ppn1(MPI_Comm comm, const char *tag, MPI_Comm *ppn1_comm)
+    {
+        int num_node = 0;
+        int is_shm_root = 0;
+        int err = geopm_comm_split_imp(comm, tag, &num_node, ppn1_comm, &is_shm_root);
+        if (!err && !is_shm_root) {
+            err = MPI_Comm_free(ppn1_comm);
+            *ppn1_comm = MPI_COMM_NULL;
+        }
+        return err;
+    }
+
+    int geopm_comm_split_shared(MPI_Comm comm, const char *tag, MPI_Comm *split_comm)
+    {
+        int err = 0;
+        struct stat stat_struct;
+        try {
+            std::ostringstream shmem_key;
+            shmem_key << geopm_env_shmkey() << "-comm-split-" << tag;
+            std::ostringstream shmem_path;
+            shmem_path << "/dev/shm" << shmem_key.str();
+            geopm::SharedMemory *shmem = NULL;
+            geopm::SharedMemoryUser *shmem_user = NULL;
+            int rank, color = -1;
+
+            MPI_Comm_rank(comm, &rank);
+            // remove shared memory file if one already exists
+            (void)unlink(shmem_path.str().c_str());
+            MPI_Barrier(comm);
+            err = stat(shmem_path.str().c_str(), &stat_struct);
+            if (!err || (err && errno != ENOENT)) {
+                std::stringstream ex_str;
+                ex_str << "geopm_comm_split_shared(): " << shmem_key.str()
+                       << " already exists and cannot be deleted.";
+                throw geopm::Exception(ex_str.str(), GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
+            }
+            MPI_Barrier(comm);
+            try {
+                shmem = new geopm::SharedMemory(shmem_key.str(), sizeof(int));
+            }
+            catch (geopm::Exception ex) {
+                if (ex.err_value() != EEXIST) {
+                    throw ex;
+                }
+            }
+            if (!shmem) {
+                shmem_user = new geopm::SharedMemoryUser(shmem_key.str(), 1);
+            }
+            else {
+                color = rank;
+                *((int*)(shmem->pointer())) = color;
+            }
+            MPI_Barrier(comm);
+            if (shmem_user) {
+                color = *((int*)(shmem_user->pointer()));
+            }
+            err = MPI_Comm_split(comm, color, rank, split_comm);
+            delete shmem;
+            delete shmem_user;
+        }
+        catch (...) {
+            err = geopm::exception_handler(std::current_exception());
+        }
+        return err;
+    }
+
+    int geopm_comm_split(MPI_Comm comm, const char *tag, MPI_Comm *split_comm, int *is_ctl_comm)
+    {
+        int num_node = 0;
+        return geopm_comm_split_imp(comm, tag, &num_node, split_comm, is_ctl_comm);
+    }
+
+    static int geopm_comm_split_imp(MPI_Comm comm, const char *tag, int *num_node, MPI_Comm *split_comm, int *is_shm_root)
+    {
+        int err, comm_size, comm_rank, shm_rank;
+        MPI_Comm shm_comm = MPI_COMM_NULL, tmp_comm = MPI_COMM_NULL;
+        MPI_Comm *split_comm_ptr;
+
+        *is_shm_root = 0;
+
+        if (split_comm) {
+            split_comm_ptr = split_comm;
+        }
+        else {
+            split_comm_ptr = &tmp_comm;
+        }
+
+        err = MPI_Comm_size(comm, &comm_size);
+        if (!err) {
+            err = MPI_Comm_rank(comm, &comm_rank);
+        }
+        if (!err) {
+            err = geopm_comm_split_shared(comm, tag, &shm_comm);
+        }
+        if (!err) {
+            err = MPI_Comm_rank(shm_comm, &shm_rank);
+        }
+        if (!err) {
+            if (!shm_rank) {
+                *is_shm_root = 1;
+            }
+            else {
+                *is_shm_root = 0;
+            }
+            err = MPI_Comm_split(comm, *is_shm_root, comm_rank, split_comm_ptr);
+        }
+        if (!err) {
+            if (*is_shm_root == 1) {
+                err = MPI_Comm_size(*split_comm_ptr, num_node);
+            }
+        }
+        if (!err) {
+            err = MPI_Bcast(num_node, 1, MPI_INT, 0, shm_comm);
+        }
+        if (shm_comm != MPI_COMM_NULL) {
+            MPI_Comm_free(&shm_comm);
+        }
+        if (!split_comm) {
+            MPI_Comm_free(split_comm_ptr);
+        }
+        return err;
+    }
+}
 
 namespace geopm
 {
@@ -116,7 +243,7 @@ namespace geopm
             int m_size;
             int m_rank;
             struct geopm_sample_message_s *m_sample_mailbox;
-            struct geopm_policy_message_s *m_policy_mailbox;
+            volatile struct geopm_policy_message_s m_policy_mailbox;
             MPI_Win m_sample_window;
             MPI_Win m_policy_window;
             size_t m_overhead_send;
@@ -309,7 +436,7 @@ namespace geopm
         , m_size(0)
         , m_rank(0)
         , m_sample_mailbox(NULL)
-        , m_policy_mailbox(NULL)
+        , m_policy_mailbox(GEOPM_POLICY_UNKNOWN)
         , m_sample_window(MPI_WIN_NULL)
         , m_policy_window(MPI_WIN_NULL)
         , m_overhead_send(0)
@@ -332,12 +459,12 @@ namespace geopm
         , m_overhead_send(other.m_overhead_send)
         , m_last_policy(other.m_last_policy)
     {
+        m_policy_mailbox.mode = other.m_policy_mailbox.mode;
+        m_policy_mailbox.flags = other.m_policy_mailbox.flags;
+        m_policy_mailbox.num_sample = other.m_policy_mailbox.num_sample;
+        m_policy_mailbox.power_budget = other.m_policy_mailbox.power_budget;
         MPI_Comm_dup(other.m_comm, &m_comm);
         create_window();
-        m_policy_mailbox->mode = other.m_policy_mailbox->mode;
-        m_policy_mailbox->flags = other.m_policy_mailbox->flags;
-        m_policy_mailbox->num_sample = other.m_policy_mailbox->num_sample;
-        m_policy_mailbox->power_budget = other.m_policy_mailbox->power_budget;
         std::copy(other.m_sample_mailbox, other.m_sample_mailbox + m_size, m_sample_mailbox);
     }
 
@@ -351,9 +478,6 @@ namespace geopm
         }
         // Destroy policy window
         check_mpi(MPI_Win_free(&m_policy_window));
-        if (m_policy_mailbox) {
-            MPI_Free_mem(m_policy_mailbox);
-        }
         // Destroy the comm
         check_mpi(MPI_Comm_free(&m_comm));
     }
@@ -392,11 +516,11 @@ namespace geopm
     {
         if (m_rank) {
             check_mpi(MPI_Win_lock(MPI_LOCK_SHARED, m_rank, 0, m_policy_window));
-            policy = *m_policy_mailbox;
+            policy = *((struct geopm_policy_message_s*)(&m_policy_mailbox));
             check_mpi(MPI_Win_unlock(m_rank, m_policy_window));
         }
         else {
-            policy = *m_policy_mailbox;
+            policy = *((struct geopm_policy_message_s *)(&m_policy_mailbox));
         }
 
         if (geopm_is_policy_equal(&policy, &GEOPM_POLICY_UNKNOWN)) {
@@ -432,7 +556,7 @@ namespace geopm
                             GEOPM_ERROR_LOGIC, __FILE__, __LINE__);
         }
 
-        *m_policy_mailbox = policy[0];
+        *((struct geopm_policy_message_s *)(&m_policy_mailbox)) = policy[0];
         m_last_policy[0] = policy[0];
         size_t msg_size = sizeof(struct geopm_policy_message_s);
         int child_rank = 1;
@@ -470,10 +594,8 @@ namespace geopm
     {
         // Create policy window
         size_t msg_size = sizeof(struct geopm_policy_message_s);
-        check_mpi(MPI_Alloc_mem(msg_size, MPI_INFO_NULL, &m_policy_mailbox));
-        *m_policy_mailbox = GEOPM_POLICY_UNKNOWN;
         if (m_rank) {
-            check_mpi(MPI_Win_create((void *)m_policy_mailbox, msg_size, 1,
+            check_mpi(MPI_Win_create((void *)(&m_policy_mailbox), msg_size, 1,
                                      MPI_INFO_NULL, m_comm, &m_policy_window));
         }
         else {

@@ -1,4 +1,13 @@
 /*
+ * Copyright 2017, 2018 Science and Technology Facilities Council (UK)
+ * IBM Confidential
+ * OCO Source Materials
+ * 5747-SM3
+ * (c) Copyright IBM Corp. 2017, 2018
+ * The source code for this program is not published or otherwise
+ * divested of its trade secrets, irrespective of what has
+ * been deposited with the U.S. Copyright Office.
+ *
  * Copyright (c) 2015, 2016, 2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +40,9 @@
  */
 
 #include <inttypes.h>
+#ifdef X86
 #include <cpuid.h>
+#endif
 #include <string>
 #include <sstream>
 #include <dlfcn.h>
@@ -42,6 +53,7 @@
 #include "DeciderFactory.hpp"
 #include "StaticPolicyDecider.hpp"
 #include "config.h"
+
 
 void geopm_factory_register(struct geopm_factory_c *factory, geopm::IDecider *decider, void *dl_ptr)
 {
@@ -57,12 +69,8 @@ namespace geopm
 
     DeciderFactory::DeciderFactory()
     {
-        int err = 0;
         // register all the deciders we know about
-        err = geopm_plugin_load(GEOPM_PLUGIN_TYPE_DECIDER, (struct geopm_factory_c *)this);
-        if (err){
-            throw geopm::Exception(err, __FILE__, __LINE__);
-        }
+        geopm_plugin_load(GEOPM_PLUGIN_TYPE_DECIDER, (struct geopm_factory_c *)this);
         register_decider(new StaticPolicyDecider(), NULL);
     }
 

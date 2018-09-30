@@ -1,4 +1,13 @@
 /*
+ * Copyright 2017, 2018 Science and Technology Facilities Council (UK)
+ * IBM Confidential
+ * OCO Source Materials
+ * 5747-SM3
+ * (c) Copyright IBM Corp. 2017, 2018
+ * The source code for this program is not published or otherwise
+ * divested of its trade secrets, irrespective of what has
+ * been deposited with the U.S. Copyright Office.
+ *
  * Copyright (c) 2016, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
@@ -93,6 +102,7 @@ namespace geopm
                              << "clk_unhalted_core-" << i << " | "
                              << "clk_unhalted_ref-" << i << " | "
                              << "read_bandwidth-" << i << " | "
+			     << "gpu_energy-" << i << " | "
                              << "progress-" << i << " | "
                              << "runtime-" << i << " | ";
                 }
