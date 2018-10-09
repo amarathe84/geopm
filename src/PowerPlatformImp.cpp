@@ -268,16 +268,17 @@ namespace geopm
         /* !@todo: Query this information from the available frequencies
          *         once a consistent interface to frequency is available
          */
+
         long av_freq[] = {3000000,2983000,2966000,2950000,2933000,2916000,2900000,2883000,2866000,2850000,2833000,2816000,2800000,2783000,2766000,2750000,2733000,2716000,2700000,2683000,2666000,2650000,2633000,2616000,2600000,2583000,2566000,2550000,2533000,2516000,2500000,2483000,2466000,2450000,2433000,2416000,2400000,2383000,2366000,2350000,2333000,2316000,2300000}; 
 
         /* Get modeled frequency based on the target power limit */
-        long target_freq = (47835.22f)*value + 1145.4f;
+        double target_freq = (47835.22f)*value + 1145.4f;
        
         /* Get the frequency index closest to the modeled value */
         /* Default frequency is maximum */
         int freqiter=0;
         for(freqiter = 1; freqiter < 42; freqiter++) {
-            if(av_freq[freqiter-1] > target_freq) {
+            if((double)av_freq[freqiter-1] > target_freq) {
                 break;
             } 
         } 

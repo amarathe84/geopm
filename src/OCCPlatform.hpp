@@ -68,6 +68,11 @@ namespace geopm
     const std::string m_description;
     /// @brief Vector of signal read operations.
     std::vector<struct geopm_signal_descriptor> m_batch_desc;
+    /// @brief Number of CPUs on the platform.
+    int m_num_cpu;
+    /// @brief Number of packages on the platform.
+    int m_num_package;
+
     struct geopm_time_s m_prev_sample_time;
   };
 

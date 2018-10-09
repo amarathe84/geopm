@@ -43,10 +43,8 @@
 #include "config.h"
 #include "Exception.hpp"
 
-/* FIXME: This is hard coded for now, but
- * we should see whether there is a way
- * to find programatically out number 
- * size of L3 cache line in bytes
+/*!@todo: 
+ * Need to programmatically find out the size of L3 cache
  */
 
 #define L3_CACHE_LINE_SIZE 128
@@ -76,6 +74,9 @@ namespace geopm
         /// here will go initialisations once we implement
         /// interface with OCC
         printf(" OCC: Setup counters\n");
+        m_num_cpu = m_imp->num_hw_cpu();
+        m_num_package = m_imp->num_package();
+
         m_num_counter_domain = m_imp->num_domain(m_imp->performance_counter_domain());
         m_num_energy_domain = m_imp->num_domain(m_imp->power_control_domain());
         m_batch_desc.resize(m_num_energy_domain * m_imp->num_energy_signal() + m_num_counter_domain * m_imp->num_counter_signal());
@@ -138,7 +139,10 @@ namespace geopm
             }
         }
 
-        printf(" OCC: Read batch signal\n");
+        printf(" OCC: Read signal\n");
+        //!@todo: This is not batch read as of now. Need to convert the read into
+        //        batch read through software implementation or find out if it can 
+        //        be exposed through firmware
         m_imp->batch_read_signal(m_batch_desc, true);    
         printf(" OCC: End of initialize\n");
     }
@@ -146,7 +150,6 @@ namespace geopm
     size_t OCCPlatform::capacity(void) {
         /// number of signals that will be returned
         /// when sample method is called
-
         /// for now we just say 1 (total energy)
         /// maybe we could use results from implementation class (m_imp)
         return m_imp->num_domain(m_imp->power_control_domain()) * (m_imp->num_energy_signal() + m_imp->num_counter_signal());
@@ -157,7 +160,7 @@ namespace geopm
         //!@todo: Change this to query power domain values 
         // from the OPAL interface.
         // For now, setting fixed values for the 
-        // interface.
+        // interface since these are only for reference.
         upper_bound = 3050;
         lower_bound = 500;
     }
@@ -239,8 +242,6 @@ namespace geopm
     }
 
     void OCCPlatform::enforce_policy(uint64_t region_id, IPolicy &policy) const {
-        // this funnction is used to enforce policy for a given region
-        // it should use the method write_control() from m_imp
         int control_type;
         std::vector<double> target(m_num_energy_domain);
         policy.target(region_id, target);
