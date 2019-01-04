@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,6 +30,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -42,19 +43,34 @@
 #endif
 #include <fts.h>
 
-#include "geopm_plugin.h"
 #include "geopm_env.h"
 #include "config.h"
 
-#ifndef NAME_MAX
-#define NAME_MAX 1024
-#endif
+static int geopm_name_begins_with(char *str, char *key)
+{
+    char *last_slash = strrchr(str, '/');
+    if (last_slash) {
+        str = last_slash + 1;
+    }
+    int result = (strncmp(str, key, strlen(key)) == 0);
+    return result;
+}
 
-int geopm_plugin_load(int plugin_type, struct geopm_factory_c *factory)
+static int geopm_name_ends_with(char *str, char *key)
+{
+    int result = 0;
+    size_t str_len = strlen(str);
+    size_t key_len = strlen(key);
+    if (key_len <= str_len) {
+        str += str_len - key_len;
+        result = (strncmp(str, key, strlen(key)) == 0);
+    }
+    return result;
+}
+
+static void __attribute__((constructor)) libgeopm_load(void)
 {
     int err = 0;
-    void *plugin;
-    int (*register_func)(int, struct geopm_factory_c *, void *);
     int fts_options = FTS_COMFOLLOW | FTS_NOCHDIR;
     FTS *p_fts;
     FTSENT *file;
@@ -62,6 +78,13 @@ int geopm_plugin_load(int plugin_type, struct geopm_factory_c *factory)
     char **paths = NULL;
     char *default_path = GEOPM_PLUGIN_PATH;
     char path_env[NAME_MAX] = {0};
+    char so_suffix[NAME_MAX] = ".so." GEOPM_ABI_VERSION;
+    char *colon_ptr = strchr(so_suffix, ':');
+    while (colon_ptr) {
+        *colon_ptr = '.';
+        colon_ptr = strchr(colon_ptr, ':');
+    }
+
     if (strlen(geopm_env_plugin_path())) {
         ++num_path;
         strncpy(path_env, geopm_env_plugin_path(), NAME_MAX - 1);
@@ -69,40 +92,46 @@ int geopm_plugin_load(int plugin_type, struct geopm_factory_c *factory)
         while ((path_ptr = strchr(path_ptr, ':'))) {
             *path_ptr = '\0';
             ++num_path;
+            ++path_ptr;
         }
     }
     paths = calloc(num_path + 1, sizeof(char *));
     if (!paths) {
         err = ENOMEM;
+#ifdef GEOPM_DEBUG
+        fprintf(stderr, "Warning: failed to calloc paths.\n");
+#endif
     }
     if (!err) {
         paths[0] = default_path;
         char *path_ptr = path_env;
         for (int i = 1; i < num_path; ++i) {
-            paths[i] = path_ptr;
+            paths[num_path - i] = path_ptr;
             path_ptr += strlen(path_ptr) + 1;
         }
 
         if ((p_fts = fts_open(paths, fts_options, NULL)) != NULL) {
             while ((file = fts_read(p_fts)) != NULL) {
+                // Plugin file names must begin with any of:
+                //      "libgeopmagent_"
+                //      "libgeopmiogroup_"
+                //      "libgeopmcomm_"
+                // and end with either of:
+                //      ".so.GEOPM_ABI_VERSION"
+                //      ".dylib.GEOPM_ABI_VERSION"
+                // Also check that the library has not already been loaded.
                 if (file->fts_info == FTS_F &&
-                    (strstr(file->fts_name, ".so") ||
-                     strstr(file->fts_name, ".dylib"))) {
-                    plugin = dlopen(file->fts_path, RTLD_LAZY);
-                    if (plugin != NULL) {
-                        register_func = (int (*)(int, struct geopm_factory_c *, void *)) dlsym(plugin, "geopm_plugin_register");
-                        if (register_func != NULL) {
-                            err = register_func(plugin_type, factory, plugin);
-                        }
-                        else {
-                            dlclose(plugin);
-                        }
-                    }
-                    else {
-                        err = -1;
+                    (geopm_name_ends_with(file->fts_name, so_suffix) ||
+                     geopm_name_ends_with(file->fts_name, ".dylib"))) {
+                    if ((geopm_name_begins_with(file->fts_name, "libgeopmagent_") ||
+                         geopm_name_begins_with(file->fts_name, "libgeopmiogroup_") ||
+                         geopm_name_begins_with(file->fts_name, "libgeopmcomm_")) &&
+                        dlopen(file->fts_path, RTLD_NOLOAD) == NULL) {
+                        if (NULL == dlopen(file->fts_path, RTLD_LAZY)) {
 #ifdef GEOPM_DEBUG
-                        fprintf(stderr,"Error dlopen(): %s\n", dlerror());
+                            fprintf(stderr, "Warning: failed to dlopen plugin %s.\n", file->fts_path);
 #endif
+                        }
                     }
                 }
             }
@@ -110,6 +139,4 @@ int geopm_plugin_load(int plugin_type, struct geopm_factory_c *factory)
         }
         free(paths);
     }
-
-    return err;
 }

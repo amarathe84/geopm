@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -39,12 +39,16 @@ const char *program_invocation_name = "geopm_profile";
 #include <string.h>
 #include <limits.h>
 #include <errno.h>
-#include <string>
 #include <unistd.h>
 
+#include <string>
+#include <vector>
+
 #include "geopm_env.h"
+#include "geopm_internal.h"
 #include "Exception.hpp"
 
+#include "config.h"
 
 namespace geopm
 {
@@ -54,7 +58,8 @@ namespace geopm
     {
         public:
             Environment();
-            virtual ~Environment();
+            virtual ~Environment() = default;
+            void load(void);
             const char *report(void) const;
             const char *comm(void) const;
             const char *policy(void) const;
@@ -62,11 +67,13 @@ namespace geopm
             const char *trace(void) const;
             const char *plugin_path(void) const;
             const char *profile(void) const;
-            int report_verbosity(void) const;
+            const char *agent(void) const;
+            const char *trace_signal(int index) const;
+            int max_fan_out(void) const;
+            int num_trace_signal(void) const;
             int pmpi_ctl(void) const;
             int do_region_barrier(void) const;
             int do_trace(void) const;
-            int do_ignore_affinity() const;
             int do_profile() const;
             int profile_timeout(void) const;
             int debug_attach(void) const;
@@ -76,82 +83,111 @@ namespace geopm
             std::string m_report;
             std::string m_comm;
             std::string m_policy;
+            std::string m_agent;
             std::string m_shmkey;
             std::string m_trace;
             std::string m_plugin_path;
             std::string m_profile;
-            int m_report_verbosity;
+            int m_max_fan_out;
             int m_pmpi_ctl;
             bool m_do_region_barrier;
             bool m_do_trace;
-            bool m_do_ignore_affinity;
             bool m_do_profile;
             int m_profile_timeout;
             int m_debug_attach;
+            std::vector<std::string> m_trace_signal;
     };
 
-    static const Environment &environment(void)
+    static Environment &test_environment(void)
     {
-        static const Environment instance;
+        static Environment instance;
         return instance;
     }
 
-    Environment::Environment()
-        : m_report("")
-        , m_comm("MPIComm")
-        , m_policy("")
-        , m_shmkey("/geopm-shm-" + std::to_string(geteuid()))
-        , m_trace("")
-        , m_plugin_path("")
-        , m_profile("")
-        , m_report_verbosity(0)
-        , m_pmpi_ctl(GEOPM_PMPI_CTL_NONE)
-        , m_do_region_barrier(false)
-        , m_do_trace(false)
-        , m_do_ignore_affinity(false)
-        , m_do_profile(false)
-        , m_profile_timeout(30)
-        , m_debug_attach(-1)
+    static const Environment &environment(void)
     {
+        return test_environment();
+    }
+
+    Environment::Environment()
+    {
+        load();
+    }
+
+    void Environment::load()
+    {
+        m_report = "";
+        m_comm = "MPIComm";
+        m_policy = "";
+        m_agent = "monitor";
+        m_shmkey = "/geopm-shm-" + std::to_string(geteuid());
+        m_trace = "";
+        m_plugin_path = "";
+        m_profile = "";
+        m_max_fan_out = 16;
+        m_pmpi_ctl = GEOPM_CTL_NONE;
+        m_do_region_barrier = false;
+        m_do_trace = false;
+        m_do_profile = false;
+        m_profile_timeout = 30;
+        m_debug_attach = -1;
+        m_trace_signal.clear();
+
         std::string tmp_str("");
 
         (void)get_env("GEOPM_REPORT", m_report);
         (void)get_env("GEOPM_COMM", m_comm);
         (void)get_env("GEOPM_POLICY", m_policy);
+        (void)get_env("GEOPM_AGENT", m_agent);
         (void)get_env("GEOPM_SHMKEY", m_shmkey);
         if (m_shmkey[0] != '/') {
             m_shmkey = "/" + m_shmkey;
         }
         m_do_trace = get_env("GEOPM_TRACE", m_trace);
         (void)get_env("GEOPM_PLUGIN_PATH", m_plugin_path);
-        if (!get_env("GEOPM_REPORT_VERBOSITY", m_report_verbosity) && m_report.size()) {
-            m_report_verbosity = 1;
-        }
         m_do_region_barrier = get_env("GEOPM_REGION_BARRIER", tmp_str);
-        m_do_ignore_affinity = get_env("GEOPM_ERROR_AFFINITY_IGNORE", tmp_str);
         (void)get_env("GEOPM_PROFILE_TIMEOUT", m_profile_timeout);
-        if (get_env("GEOPM_PMPI_CTL", tmp_str)) {
+        if (get_env("GEOPM_CTL", tmp_str)) {
             if (tmp_str == "process") {
-                m_pmpi_ctl = GEOPM_PMPI_CTL_PROCESS;
+                m_pmpi_ctl = GEOPM_CTL_PROCESS;
             }
             else if (tmp_str == "pthread") {
-                m_pmpi_ctl = GEOPM_PMPI_CTL_PTHREAD;
+                m_pmpi_ctl = GEOPM_CTL_PTHREAD;
+            }
+            else {
+                throw Exception("Environment::Environment(): " + tmp_str +
+                                " is not a valid value for GEOPM_CTL see geopm(7).",
+                                GEOPM_ERROR_INVALID, __FILE__, __LINE__);
             }
         }
         get_env("GEOPM_DEBUG_ATTACH", m_debug_attach);
         m_do_profile = get_env("GEOPM_PROFILE", m_profile);
+        (void)get_env("GEOPM_MAX_FAN_OUT", m_max_fan_out);
         if (m_report.length() ||
             m_do_trace ||
-            m_pmpi_ctl != GEOPM_PMPI_CTL_NONE) {
+            m_pmpi_ctl != GEOPM_CTL_NONE) {
             m_do_profile = true;
         }
         if (m_do_profile && !m_profile.length()) {
             m_profile = program_invocation_name;
         }
-    }
 
-    Environment::~Environment()
-    {
+        bool do_parse = get_env("GEOPM_TRACE_SIGNALS", tmp_str);
+        if (do_parse) {
+            std::string request;
+            // split on comma
+            size_t begin = 0;
+            size_t end = -1;
+            do {
+                begin = end + 1;
+                end = tmp_str.find(",", begin);
+                request = tmp_str.substr(begin, end - begin);
+                if (!request.empty()) {
+                    m_trace_signal.push_back(request);
+                }
+            }
+            while (end != std::string::npos);
+        }
 
     }
 
@@ -202,6 +238,11 @@ namespace geopm
         return m_policy.c_str();
     }
 
+    const char *Environment::agent(void) const
+    {
+        return m_agent.c_str();
+    }
+
     const char *Environment::shmkey(void) const
     {
         return m_shmkey.c_str();
@@ -222,9 +263,24 @@ namespace geopm
         return m_plugin_path.c_str();
     }
 
-    int Environment::report_verbosity(void) const
+    const char *Environment::trace_signal(int index) const
     {
-        return m_report_verbosity;
+        static const char *empty_string = "";
+        const char *result = empty_string;
+        if (index >= 0 || (size_t)index <= m_trace_signal.size()) {
+            result = m_trace_signal[index].c_str();
+        }
+        return result;
+    }
+
+    int Environment::max_fan_out(void) const
+    {
+        return m_max_fan_out;
+    }
+
+    int Environment::num_trace_signal(void) const
+    {
+        return m_trace_signal.size();
     }
 
     int Environment::pmpi_ctl(void) const
@@ -240,11 +296,6 @@ namespace geopm
     int Environment::do_trace(void) const
     {
         return m_do_trace;
-    }
-
-    int Environment::do_ignore_affinity(void) const
-    {
-        return m_do_ignore_affinity;
     }
 
     int Environment::do_profile(void) const
@@ -265,9 +316,19 @@ namespace geopm
 
 extern "C"
 {
+    void geopm_env_load(void)
+    {
+        geopm::test_environment().load();
+    }
+
     const char *geopm_env_policy(void)
     {
         return geopm::environment().policy();
+    }
+
+    const char *geopm_env_agent(void)
+    {
+        return geopm::environment().agent();
     }
 
     const char *geopm_env_shmkey(void)
@@ -299,10 +360,19 @@ extern "C"
     {
         return geopm::environment().profile();
     }
-
-    int geopm_env_report_verbosity(void)
+    const char *geopm_env_trace_signal(int index)
     {
-        return geopm::environment().report_verbosity();
+        return geopm::environment().trace_signal(index);
+    }
+
+    int geopm_env_max_fan_out(void)
+    {
+        return geopm::environment().max_fan_out();
+    }
+
+    int geopm_env_num_trace_signal(void)
+    {
+        return geopm::environment().num_trace_signal();
     }
 
     int geopm_env_pmpi_ctl(void)
@@ -318,11 +388,6 @@ extern "C"
     int geopm_env_do_trace(void)
     {
         return geopm::environment().do_trace();
-    }
-
-    int geopm_env_do_ignore_affinity(void)
-    {
-        return geopm::environment().do_ignore_affinity();
     }
 
     int geopm_env_do_profile(void)

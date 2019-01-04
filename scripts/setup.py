@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -63,11 +63,9 @@ long_description = """\
 The python front end to the GEOPM runtime.  Includes scripts for
 launching the runtime and postprocessing the output data."""
 
-scripts = ['geopmsrun',
-           'geopmaprun',
-           'geopmplotter']
+scripts = ['geopmlaunch']
 
-classifiers = ['Development Status :: 3 - Alpha',
+classifiers = ['Development Status :: 4 - Beta',
                'License :: OSI Approved :: BSD License',
                'Operating System :: POSIX :: Linux',
                'Natural Language :: English',
@@ -80,13 +78,15 @@ classifiers = ['Development Status :: 3 - Alpha',
 install_requires = ['pandas>=0.19.2',
                     'natsort',
                     'matplotlib',
-                    'cycler']
+                    'cycler',
+                    'tables',
+                    'psutil']
 
 setup(name='geopmpy',
       version=__version__,
       description='GEOPM - Global Extensible Open Power Manager',
       long_description=long_description,
-      url='https://geopm.github.io/geopm',
+      url='https://geopm.github.io',
       download_url='http://download.opensuse.org/repositories/home:/cmcantalupo:/geopm/',
       license='BSD-3-Clause',
       author='Christopher Cantalupo <christopher.m.cantalupo@intel.com>, Brad Geltz <brad.geltz@intel.com>',

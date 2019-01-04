@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,7 +31,9 @@
  */
 
 #include "gtest/gtest.h"
+#include "geopm_internal.h"
 #include "SampleRegulator.hpp"
+#include "CircularBuffer.hpp"
 
 class SampleRegulatorTest : public geopm::SampleRegulator, public testing::Test
 {
@@ -102,24 +104,20 @@ TEST_F(SampleRegulatorTest, insert_profile)
 
     insert(m_test_prof.begin(), m_test_prof.end());
     sample_expect.timestamp = m_test_sample_time[0];
-    sample_expect.runtime = 0.0;
     sample_expect.progress = 0.1;
     for (int i = 0; i != 4; ++i) {
         ASSERT_EQ(m_rank_sample_prev[i]->size(), 2);
         sample = m_rank_sample_prev[i]->value(0);
         ASSERT_DOUBLE_EQ(0.0, geopm_time_diff(&(sample_expect.timestamp), &(sample.timestamp)));
         ASSERT_DOUBLE_EQ(sample_expect.progress, sample.progress);
-        ASSERT_DOUBLE_EQ(sample_expect.runtime, sample.runtime);
     }
 
     sample_expect.timestamp = m_test_sample_time[1];
     sample_expect.progress = 0.2;
-    sample_expect.runtime = 0.0;
     for (int i = 0; i != 4; ++i) {
         sample = m_rank_sample_prev[i]->value(1);
         ASSERT_DOUBLE_EQ(0.0, geopm_time_diff(&(sample_expect.timestamp), &(sample.timestamp)));
         ASSERT_DOUBLE_EQ(sample_expect.progress, sample.progress);
-        ASSERT_DOUBLE_EQ(sample_expect.runtime, sample.runtime);
     }
 }
 
@@ -130,10 +128,7 @@ TEST_F(SampleRegulatorTest, align_profile)
     insert(m_test_plat.begin(), m_test_plat.end());
     align(m_test_sample_time[1]);
     for (unsigned i = 24; i < m_aligned_signal.size(); ++i) {
-        if (i % 2) {
-            ASSERT_DOUBLE_EQ(-1.0, m_aligned_signal[i]);
-        }
-        else {
+        if ((i % 2) == 0) { // progress signal
             ASSERT_DOUBLE_EQ(0.0, m_aligned_signal[i]);
         }
     }
@@ -142,10 +137,7 @@ TEST_F(SampleRegulatorTest, align_profile)
     insert(m_test_prof.begin(), m_test_prof.end());
     align(m_test_sample_time[1]);
     for (unsigned i = 24; i < m_aligned_signal.size(); ++i) {
-        if (i % 2) { // runtime signal
-            ASSERT_DOUBLE_EQ(0.0, m_aligned_signal[i]);
-        }
-        else { // progress signal
+        if ((i % 2) == 0) { // progress signal
             ASSERT_DOUBLE_EQ(0.2, m_aligned_signal[i]);
         }
     }
@@ -154,10 +146,7 @@ TEST_F(SampleRegulatorTest, align_profile)
     geopm_time_add(m_test_sample_time + 1, 1.0, &platform_time);
     align(platform_time);
     for (unsigned i = 24; i < m_aligned_signal.size(); ++i) {
-        if (i % 2) { // runtime signal
-            ASSERT_DOUBLE_EQ(0.0, m_aligned_signal[i]);
-        }
-        else { // progress signal
+        if ((i % 2) == 0) { // progress signal
             ASSERT_DOUBLE_EQ(0.3, m_aligned_signal[i]);
         }
     }
@@ -165,10 +154,7 @@ TEST_F(SampleRegulatorTest, align_profile)
     geopm_time_add(m_test_sample_time + 1, 100.0, &platform_time);
     align(platform_time);
     for (unsigned i = 24; i < m_aligned_signal.size(); ++i) {
-        if (i % 2) { // runtime signal
-            ASSERT_DOUBLE_EQ(0.0, m_aligned_signal[i]);
-        }
-        else { // progress signal
+        if ((i % 2) == 0) { // progress signal
             ASSERT_NEAR(1.0, m_aligned_signal[i], 1E-9);
         }
     }
@@ -182,18 +168,15 @@ TEST_F(SampleRegulatorTest, align_profile)
     m_test_prof.resize(4);
     geopm_time_add(m_test_sample_time + 1, 8.0, &platform_time);
     for (auto it = m_test_prof.begin(); it != m_test_prof.end(); ++it) {
-        ++(*it).second.region_id; // enter new region on all ranks
-        (*it).second.progress = 0.4;
-        (*it).second.timestamp = platform_time;
+        ++(it->second.region_id); // enter new region on all ranks
+        it->second.progress = 0.4;
+        it->second.timestamp = platform_time;
     }
     insert(m_test_prof.begin(), m_test_prof.end());
     geopm_time_add(m_test_sample_time + 1, 9.0, &platform_time);
     align(platform_time);
     for (unsigned i = 24; i < m_aligned_signal.size(); ++i) {
-        if (i % 2) { // runtime signal
-            ASSERT_DOUBLE_EQ(0.0, m_aligned_signal[i]);
-        }
-        else { // progress signal
+        if ((i % 2) == 0) { // progress signal
             ASSERT_DOUBLE_EQ(0.4, m_aligned_signal[i]);
         }
     }

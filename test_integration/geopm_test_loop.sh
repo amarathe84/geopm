@@ -1,5 +1,5 @@
 #!/bin/bash
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -37,7 +37,7 @@ while [ $? -eq 0 -a ${COUNT} -lt 10 ];
 do
     COUNT=$((COUNT+1))
     echo "Beginning loop ${COUNT}..." > >(tee -a ${LOG_FILE})
-    GEOPM_RUN_LONG_TESTS=true ./geopm_test_integration.py -fv > >(tee -a ${LOG_FILE}) 2>&1
+    GEOPM_RUN_LONG_TESTS=true ./geopm_test_integration.py -v > >(tee -a ${LOG_FILE}) 2>&1
 done
 TEST_RETURN_CODE=$?
 

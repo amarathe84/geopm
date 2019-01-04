@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,9 +37,44 @@
 #include "SharedMemory.hpp"
 #include "geopm_mpi_comm_split.h"
 #include "Exception.hpp"
+#include "Controller.hpp"
+#include "Comm.hpp"
+#include "PluginFactory.hpp"
+#include "MPIComm.hpp"
+
+#include "config.h"
 
 extern "C"
 {
+    static void __attribute__((constructor)) geopm_load(void)
+    {
+        try {
+            geopm::comm_factory().register_plugin(geopm::MPIComm::plugin_name(),
+                                                  geopm::MPIComm::make_plugin);
+        }
+        catch(...) {
+            geopm::exception_handler(std::current_exception(), true);
+        }
+    }
+
+    int geopm_ctl_create(MPI_Comm comm, struct geopm_ctl_c **ctl)
+    {
+        int err = 0;
+        try {
+            auto tmp_comm = std::unique_ptr<geopm::Comm>(new geopm::MPIComm(comm));
+            *ctl = (struct geopm_ctl_c *)(new geopm::Controller(std::move(tmp_comm)));
+        }
+        catch (...) {
+            err = geopm::exception_handler(std::current_exception(), true);
+        }
+        return err;
+    }
+
+    int geopm_ctl_create_f(int comm, struct geopm_ctl_c **ctl)
+    {
+        return geopm_ctl_create(MPI_Comm_f2c(comm), ctl);
+    }
+
     static int geopm_comm_split_imp(MPI_Comm comm, const char *tag, int *num_node, MPI_Comm *split_comm, int *is_ctl_comm);
 
     int geopm_comm_split_ppn1(MPI_Comm comm, const char *tag, MPI_Comm *ppn1_comm)
@@ -75,14 +110,14 @@ extern "C"
             if (!err || (err && errno != ENOENT)) {
                 std::stringstream ex_str;
                 ex_str << "geopm_comm_split_shared(): " << shmem_key.str()
-                    << " already exists and cannot be deleted.";
+                       << " already exists and cannot be deleted.";
                 throw geopm::Exception(ex_str.str(), GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
             }
             MPI_Barrier(comm);
             try {
                 shmem = new geopm::SharedMemory(shmem_key.str(), sizeof(int));
             }
-            catch (geopm::Exception ex) {
+            catch (const geopm::Exception &ex) {
                 if (ex.err_value() != EEXIST) {
                     throw ex;
                 }

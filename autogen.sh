@@ -1,5 +1,5 @@
 #!/bin/bash
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -47,13 +47,15 @@ if [ ! -f VERSION ]; then
     echo $version > VERSION
 fi
 
+# Grab the first paragraph from the README to use in other files.
+grep -A4096 '^SUMMARY$' README | tail -n+3 | grep -m1 '^$' -B4096 | head -n-1 > BLURB
+
+if [ -f .git/config ]; then
+    git ls-tree --full-tree -r HEAD | awk '{print $4}' | sort > MANIFEST
+fi
 if [ ! -f MANIFEST ]; then
-    if [ -f .git/config ]; then
-        git ls-tree --full-tree -r HEAD | awk '{print $4}' | sort > MANIFEST
-    else
-        echo "WARNING: MANIFEST file does not exist and working directory is not a git repository, creating with find" 2>&1
-        find . -type f | sed 's|^\./||' | sort > MANIFEST
-    fi
+    echo "WARNING: MANIFEST file does not exist and working directory is not a git repository, creating with find" 2>&1
+    find . -type f | sed 's|^\./||' | sort > MANIFEST
 fi
 
 mkdir -p m4

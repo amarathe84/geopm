@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,6 +32,7 @@
 
 #include <stdint.h>
 #include <string>
+#include <limits.h>
 #include <map>
 #include <iostream>
 #include <fstream>
@@ -39,8 +40,8 @@
 #include <iomanip>
 #include <sys/wait.h>
 
-#include "geopm.h"
-#include "geopm_message.h"
+#include "geopm_internal.h"
+#include "geopm_sched.h"
 #include "geopm_error.h"
 #include "Exception.hpp"
 #include "OMPT.hpp"
@@ -63,17 +64,8 @@ namespace geopm
 
 extern "C"
 {
-    static volatile unsigned g_is_popen_complete = 0;
-    static struct sigaction g_popen_complete_signal_action;
-
-    static void geopm_popen_complete(int signum)
-    {
-        if (signum == SIGCHLD) {
-            g_is_popen_complete = 1;
-        }
-    }
+    int geopm_is_pmpi_prof_enabled(void);
 }
-
 
 namespace geopm
 {
@@ -82,7 +74,7 @@ namespace geopm
         public:
             OMPT();
             OMPT(const std::string &map_path);
-            virtual ~OMPT();
+            virtual ~OMPT() = default;
             uint64_t region_id(void *parallel_function);
             void region_name(void *parallel_function, std::string &name);
             void region_name_pretty(std::string &name);
@@ -93,7 +85,7 @@ namespace geopm
             std::map<std::pair<size_t, bool>, std::string> m_range_object_map;
             /// Map from function address to geopm region ID
             std::map<size_t, uint64_t> m_function_region_id_map;
-     };
+    };
 
     static OMPT &ompt(void)
     {
@@ -111,58 +103,53 @@ namespace geopm
     {
         std::ifstream maps_stream(map_path);
         while (maps_stream.good()) {
-           std::string line;
-           std::getline(maps_stream, line);
-           if (line.length() == 0) {
-               continue;
-           }
-           size_t addr_begin, addr_end;
-           int n_scan = sscanf(line.c_str(), "%zx-%zx", &addr_begin, &addr_end);
-           if (n_scan != 2) {
-               continue;
-           }
+            std::string line;
+            std::getline(maps_stream, line);
+            if (line.length() == 0) {
+                continue;
+            }
+            size_t addr_begin, addr_end;
+            int n_scan = sscanf(line.c_str(), "%zx-%zx", &addr_begin, &addr_end);
+            if (n_scan != 2) {
+                continue;
+            }
 
-           std::string object;
-           size_t object_loc = line.rfind(' ') + 1;
-           if (object_loc == std::string::npos) {
-               continue;
-           }
-           object = line.substr(object_loc);
-           if (line.find(" r-xp ") != line.find(' ')) {
-               continue;
-           }
-           std::pair<size_t, bool> aa(addr_begin, false);
-           std::pair<size_t, bool> bb(addr_end, true);
-           std::pair<std::pair<size_t, bool>, std::string> cc(aa, object);
-           std::pair<std::pair<size_t, bool>, std::string> dd(bb, object);
-           auto it0 = m_range_object_map.insert(m_range_object_map.begin(), cc);
-           auto it1 = m_range_object_map.insert(it0, dd);
-           ++it0;
-           if (it0 != it1) {
-               throw Exception("Error parsing /proc/self/maps, overlapping address ranges.",
-                               GEOPM_ERROR_LOGIC, __FILE__, __LINE__);
-           }
+            std::string object;
+            size_t object_loc = line.rfind(' ') + 1;
+            if (object_loc == std::string::npos) {
+                continue;
+            }
+            object = line.substr(object_loc);
+            if (line.find(" r-xp ") != line.find(' ')) {
+                continue;
+            }
+            std::pair<size_t, bool> aa(addr_begin, false);
+            std::pair<size_t, bool> bb(addr_end, true);
+            std::pair<std::pair<size_t, bool>, std::string> cc(aa, object);
+            std::pair<std::pair<size_t, bool>, std::string> dd(bb, object);
+            auto it0 = m_range_object_map.insert(m_range_object_map.begin(), cc);
+            auto it1 = m_range_object_map.insert(it0, dd);
+            ++it0;
+            if (it0 != it1) {
+                throw Exception("Error parsing /proc/self/maps, overlapping address ranges.",
+                                GEOPM_ERROR_LOGIC, __FILE__, __LINE__);
+            }
         }
-    }
-
-    OMPT::~OMPT()
-    {
-
     }
 
     uint64_t OMPT::region_id(void *parallel_function)
     {
-        uint64_t result = GEOPM_REGION_ID_UNDEFINED;
+        uint64_t result = GEOPM_REGION_ID_UNMARKED;
         auto it = m_function_region_id_map.find((size_t)parallel_function);
         if (m_function_region_id_map.end() != it) {
-            result = (*it).second;
+            result = it->second;
         }
         else {
             std::string rn;
             region_name(parallel_function, rn);
             int err = geopm_prof_region(rn.c_str(), GEOPM_REGION_HINT_UNKNOWN, &result);
             if (err) {
-                result = GEOPM_REGION_ID_UNDEFINED;
+                result = GEOPM_REGION_ID_UNMARKED;
             }
             else {
                 m_function_region_id_map.insert(std::pair<size_t, uint64_t>((size_t)parallel_function, result));
@@ -179,11 +166,11 @@ namespace geopm
         --it_min;
         if (it_max != m_range_object_map.end() &&
             it_max != m_range_object_map.begin() &&
-            false == (*it_min).first.second &&
-            true == (*it_max).first.second) {
-            size_t offset = (size_t)parallel_function - (size_t)((*it_min).first.first);
+            false == it_min->first.second &&
+            true == it_max->first.second) {
+            size_t offset = (size_t)parallel_function - (size_t)(it_min->first.first);
             std::ostringstream name_stream;
-            name_stream << "[OMPT]" << (*it_min).second << ":0x" << std::setfill('0') << std::setw(16) << std::hex << offset;
+            name_stream << "[OMPT]" << it_min->second << ":0x" << std::setfill('0') << std::setw(16) << std::hex << offset;
             name = name_stream.str();
         }
     }
@@ -219,32 +206,21 @@ namespace geopm
                         << "rm $tmp_file"
                         << "'";
 
-                g_popen_complete_signal_action.sa_handler = geopm_popen_complete;
-                sigemptyset(&g_popen_complete_signal_action.sa_mask);
-                g_popen_complete_signal_action.sa_flags = 0;
-                struct sigaction save_action;
-                int err = sigaction(SIGCHLD, &g_popen_complete_signal_action, &save_action);
+                char buffer[NAME_MAX] = "FUNCTION_UNKNOWN";
+                FILE *pid;
+                int err = geopm_sched_popen(cmd_str.str().c_str(), &pid);
                 if (!err) {
-                    char buffer[NAME_MAX] = "FUNCTION_UNKNOWN";
-                    FILE *pid = popen(cmd_str.str().c_str(), "r");
-                    if (pid) {
-                        while (!g_is_popen_complete) {
-
-                        }
-                        g_is_popen_complete = 0;
-                        size_t num_read = fread(buffer, 1, NAME_MAX - 1, pid);
-                        if (num_read) {
-                            buffer[num_read -1] = '\0'; // Replace new line with null terminator
-                        }
-                        pclose(pid);
+                    size_t num_read = fread(buffer, 1, NAME_MAX - 1, pid);
+                    if (num_read) {
+                        buffer[num_read -1] = '\0'; // Replace new line with null terminator
                     }
-                    sigaction(SIGCHLD, &save_action, NULL);
+                    (void)pclose(pid);
                     size_t last_slash = obj_name.rfind('/');
                     if (last_slash != std::string::npos) {
                         obj_name = obj_name.substr(last_slash + 1);
                     }
-                    name = "[OMPT]" + obj_name + ":" + std::string(buffer);
                 }
+                name = "[OMPT]" + obj_name + ":" + std::string(buffer) + "_" + std::to_string(addr);
             }
         }
     }
@@ -260,44 +236,52 @@ extern "C"
 {
     static void *g_curr_parallel_function = NULL;
     static ompt_parallel_id_t g_curr_parallel_id;
-    static uint64_t g_curr_region_id = GEOPM_REGION_ID_UNDEFINED;
+    static uint64_t g_curr_region_id = GEOPM_REGION_ID_UNMARKED;
 
-    static void on_ompt_event_parallel_begin(ompt_task_id_t parent_task_id, ompt_frame_t *parent_task_frame,
-                                             ompt_parallel_id_t parallel_id, uint32_t requested_team_size,
-                                             void *parallel_function, ompt_invoker_t invoker)
-     {
-          if (g_curr_parallel_function != parallel_function) {
-              g_curr_parallel_function = parallel_function;
-              g_curr_parallel_id = parallel_id;
-              g_curr_region_id = geopm::ompt().region_id(parallel_function);
-          }
-          if (g_curr_region_id != GEOPM_REGION_ID_UNDEFINED) {
-              geopm_prof_enter(g_curr_region_id);
-          }
-     }
+    static void on_ompt_event_parallel_begin(ompt_task_id_t parent_task_id,
+                                             ompt_frame_t *parent_task_frame,
+                                             ompt_parallel_id_t parallel_id,
+                                             uint32_t requested_team_size,
+                                             void *parallel_function,
+                                             ompt_invoker_t invoker)
+    {
+        if (geopm_is_pmpi_prof_enabled() &&
+            g_curr_parallel_function != parallel_function) {
+            g_curr_parallel_function = parallel_function;
+            g_curr_parallel_id = parallel_id;
+            g_curr_region_id = geopm::ompt().region_id(parallel_function);
+        }
+        if (g_curr_region_id != GEOPM_REGION_ID_UNMARKED) {
+            geopm_prof_enter(g_curr_region_id);
+        }
+    }
 
-     static void on_ompt_event_parallel_end(ompt_parallel_id_t parallel_id, ompt_task_id_t task_id,
-                                            ompt_invoker_t invoker)
-     {
-          if (g_curr_region_id != GEOPM_REGION_ID_UNDEFINED &&
-              g_curr_parallel_id == parallel_id) {
-              geopm_prof_exit(g_curr_region_id);
-          }
-     }
+    static void on_ompt_event_parallel_end(ompt_parallel_id_t parallel_id,
+                                           ompt_task_id_t task_id,
+                                           ompt_invoker_t invoker)
+    {
+        if (geopm_is_pmpi_prof_enabled() &&
+            g_curr_region_id != GEOPM_REGION_ID_UNMARKED &&
+            g_curr_parallel_id == parallel_id) {
+            geopm_prof_exit(g_curr_region_id);
+        }
+    }
 
 
-     void ompt_initialize(ompt_function_lookup_t lookup, const char *runtime_version, unsigned int ompt_version)
-     {
-         ompt_set_callback_t ompt_set_callback = (ompt_set_callback_t) lookup("ompt_set_callback");
-         ompt_set_callback(ompt_event_parallel_begin, (ompt_callback_t) &on_ompt_event_parallel_begin);
-         ompt_set_callback(ompt_event_parallel_end, (ompt_callback_t) &on_ompt_event_parallel_end);
+    void ompt_initialize(ompt_function_lookup_t lookup,
+                         const char *runtime_version,
+                         unsigned int ompt_version)
+    {
+        ompt_set_callback_t ompt_set_callback = (ompt_set_callback_t) lookup("ompt_set_callback");
+        ompt_set_callback(ompt_event_parallel_begin, (ompt_callback_t) &on_ompt_event_parallel_begin);
+        ompt_set_callback(ompt_event_parallel_end, (ompt_callback_t) &on_ompt_event_parallel_end);
 
-     }
+    }
 
-     ompt_initialize_t ompt_tool()
-     {
-         return &ompt_initialize;
-     }
+    ompt_initialize_t ompt_tool()
+    {
+        return &ompt_initialize;
+    }
 }
 
 #endif // GEOPM_ENABLE_OMPT defined

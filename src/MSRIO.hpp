@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -42,8 +42,8 @@ namespace geopm
     class IMSRIO
     {
         public:
-            IMSRIO() {}
-            virtual ~IMSRIO() {}
+            IMSRIO() = default;
+            virtual ~IMSRIO() = default;
             /// @brief Read from a single MSR on a CPU.
             /// @brief [in] cpu_idx logical Linux CPU index to read
             ///        from.
@@ -55,17 +55,17 @@ namespace geopm
             /// @param [in] cpu_idx logical Linux CPU index to write
             ///        to.
             /// @param [in] offset The MSR offset to write to.
-            /// @param [in] write_mask The mask determines the bits of
-            ///        the MSR that will be modified.
             /// @param [in] raw_value The raw encoded MSR value to
             ///        write, only bits where the write_mask is set
             ///        will be written, other bits in the MSR will be
             ///        unmodified.
+            /// @param [in] write_mask The mask determines the bits of
+            ///        the MSR that will be modified.
             virtual void write_msr(int cpu_idx,
                                    uint64_t offset,
-                                   uint64_t write_mask,
-                                   uint64_t raw_value) = 0;
-            /// @brief initialize internal data stuctures to batch
+                                   uint64_t raw_value,
+                                   uint64_t write_mask) = 0;
+            /// @brief initialize internal data structures to batch
             ///        read/write from MSRs.
             /// @param [in] read_cpu_idx A vector of logical Linux CPU
             ///        indicies to read from when read_batch() method
@@ -104,21 +104,22 @@ namespace geopm
     {
         public:
             MSRIO();
+            MSRIO(int num_cpu);
             virtual ~MSRIO();
             uint64_t read_msr(int cpu_idx,
-                              uint64_t offset);
+                              uint64_t offset) override;
             void write_msr(int cpu_idx,
                            uint64_t offset,
                            uint64_t raw_value,
-                           uint64_t write_mask);
+                           uint64_t write_mask) override;
             void config_batch(const std::vector<int> &read_cpu_idx,
                               const std::vector<uint64_t> &read_offset,
                               const std::vector<int> &write_cpu_idx,
                               const std::vector<uint64_t> &write_offset,
-                              const std::vector<uint64_t> &write_mask);
-            void read_batch(std::vector<uint64_t> &raw_value);
-            void write_batch(const std::vector<uint64_t> &raw_value);
-        protected:
+                              const std::vector<uint64_t> &write_mask) override;
+            void read_batch(std::vector<uint64_t> &raw_value) override;
+            void write_batch(const std::vector<uint64_t> &raw_value) override;
+        private:
             struct m_msr_batch_op_s {
                 uint16_t cpu;      /// @brief In: CPU to execute {rd/wr}msr ins.
                 uint16_t isrdmsr;  /// @brief In: 0=wrmsr, non-zero=rdmsr

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,6 +35,7 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <limits.h>
 #include <sstream>
 #include <vector>
 #include <string>
@@ -42,21 +43,20 @@
 
 #include "MSRIO.hpp"
 #include "Exception.hpp"
-#include "geopm_sched.h"
 
 // Class derived from MSRIO used to test MSRIO w/o accessing the msr
 // device files.
 class TestMSRIO : public geopm::MSRIO
 {
     public:
-        TestMSRIO();
+        TestMSRIO(int num_cpu);
         virtual ~TestMSRIO();
         char *msr_space_ptr(int cpu_idx, off_t offset);
     protected:
         void msr_path(int cpu_idx,
                       bool is_fallback,
-                      std::string &path);
-        void msr_batch_path(std::string &path);
+                      std::string &path) override;
+        void msr_batch_path(std::string &path) override;
         const char **msr_words(void) const;
 
         const size_t M_MAX_OFFSET;
@@ -65,33 +65,37 @@ class TestMSRIO : public geopm::MSRIO
         std::vector<char *> m_msr_space;
 };
 
-TestMSRIO::TestMSRIO()
-    : M_MAX_OFFSET(4096)
-    , m_num_cpu(geopm_sched_num_cpu())
-    , m_test_dev_path(m_num_cpu)
-    , m_msr_space(m_num_cpu, NULL)
+TestMSRIO::TestMSRIO(int num_cpu)
+    : MSRIO(num_cpu)
+    , M_MAX_OFFSET(4096)
+    , m_num_cpu(num_cpu)
 {
-    for (int cpu_idx = 0; cpu_idx < m_num_cpu; ++cpu_idx) {
-        std::ostringstream path;
-        path << "test_msrio_dev_cpu_" << cpu_idx << "_msr_safe";
-        m_test_dev_path[cpu_idx] = path.str();
-    }
-    auto msr_space_it = m_msr_space.begin();
-    for (auto &path : m_test_dev_path) {
-        int fd = open(path.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    for (int cpu_idx = 0; cpu_idx < m_num_cpu + 1; ++cpu_idx) {
+        char tmp_path[NAME_MAX] = "/tmp/test_msrio_dev_cpu_XXXXXX";
+        int fd = mkstemp(tmp_path);
+        if (fd == -1) {
+            throw geopm::Exception("TestMSRIO: mkstemp() failed",
+                                   errno ? errno : GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
+        }
+        m_test_dev_path.push_back(tmp_path);
+
         int err = ftruncate(fd, M_MAX_OFFSET);
         if (err) {
-            throw geopm::Exception("TestMSRIO: ftruncate failed", GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
+            throw geopm::Exception("TestMSRIO: ftruncate() failed",
+                                   errno ? errno : GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
         }
         char *msr_space_ptr = (char *)mmap(NULL, M_MAX_OFFSET, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (msr_space_ptr == NULL) {
+            throw geopm::Exception("TestMSRIO: mmap() failed",
+                                   errno ? errno : GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
+        }
         close(fd);
-        *msr_space_it = msr_space_ptr;
+        m_msr_space.push_back(msr_space_ptr);
         size_t num_field = M_MAX_OFFSET / 8;
         for (size_t field_idx = 0; field_idx < num_field; ++field_idx) {
             std::copy(msr_words()[field_idx], msr_words()[field_idx] + 8, msr_space_ptr);
             msr_space_ptr += 8;
         }
-        ++msr_space_it;
     }
 }
 
@@ -649,11 +653,12 @@ class MSRIOTest : public :: testing :: Test
         void SetUp(void);
         void TearDown(void);
         TestMSRIO *m_msrio;
+        int m_num_cpu = 4;
 };
 
 void MSRIOTest::SetUp(void)
 {
-    m_msrio = new TestMSRIO();
+    m_msrio = new TestMSRIO(m_num_cpu);
 }
 
 void MSRIOTest::TearDown(void)
@@ -666,7 +671,7 @@ TEST_F(MSRIOTest, read_aligned)
     uint64_t field;
     char *space_ptr;
 
-    for (int cpu_idx = 0; cpu_idx < geopm_sched_num_cpu(); ++cpu_idx) {
+    for (int cpu_idx = 0; cpu_idx < m_num_cpu; ++cpu_idx) {
         field = m_msrio->read_msr(cpu_idx, 0);
         ASSERT_EQ(0, memcmp(&field, "absolute", 8));
         space_ptr = m_msrio->msr_space_ptr(cpu_idx, 0);
@@ -684,7 +689,7 @@ TEST_F(MSRIOTest, read_unaligned)
     uint64_t field;
     char *space_ptr;
 
-    for (int cpu_idx = 0; cpu_idx < geopm_sched_num_cpu(); ++cpu_idx) {
+    for (int cpu_idx = 0; cpu_idx < m_num_cpu; ++cpu_idx) {
         field = m_msrio->read_msr(cpu_idx, 4);
         ASSERT_EQ(0, memcmp(&field, "luteabst", 8));
         space_ptr = m_msrio->msr_space_ptr(cpu_idx, 4);
@@ -702,7 +707,7 @@ TEST_F(MSRIOTest, write)
     uint64_t field;
     char *space_ptr;
 
-    for (int cpu_idx = 0; cpu_idx < geopm_sched_num_cpu(); ++cpu_idx) {
+    for (int cpu_idx = 0; cpu_idx < m_num_cpu; ++cpu_idx) {
         memcpy(&field, "etul\0\0\0\0", 8);
         m_msrio->write_msr(cpu_idx, 0, field, 0x00000000FFFFFFFF);
         space_ptr = m_msrio->msr_space_ptr(cpu_idx, 0);
@@ -722,13 +727,15 @@ TEST_F(MSRIOTest, write)
         m_msrio->write_msr(cpu_idx, 1600, field, 0xFFFFFFFF00000000);
         space_ptr = m_msrio->msr_space_ptr(cpu_idx, 1600);
         ASSERT_EQ(0, memcmp(space_ptr, "noitcarf", 8));
+
+        EXPECT_THROW(m_msrio->write_msr(cpu_idx, 0, field, 0xFF), geopm::Exception);
     }
 }
 
 TEST_F(MSRIOTest, read_batch)
 {
     std::vector<int> cpu_idx;
-    for (int i = 0; i < geopm_sched_num_cpu(); ++i) {
+    for (int i = 0; i < m_num_cpu; ++i) {
         cpu_idx.push_back(i);
     }
     std::vector<std::string> words {"software", "engineer", "document", "everyday",
@@ -744,7 +751,7 @@ TEST_F(MSRIOTest, read_batch)
             read_cpu_idx.push_back(ci);
             read_offset.push_back(oi);
             uint64_t result;
-            memcpy(&result, (*wi).data(), 8);
+            memcpy(&result, wi->data(), 8);
             expected.push_back(result);
             ++wi;
         }
@@ -758,11 +765,11 @@ TEST_F(MSRIOTest, read_batch)
 TEST_F(MSRIOTest, write_batch)
 {
     std::vector<int> cpu_idx;
-    for (int i = 0; i < geopm_sched_num_cpu(); ++i) {
+    for (int i = 0; i < m_num_cpu; ++i) {
         cpu_idx.push_back(i);
     }
-    std::vector<std::string> begin_words {"software", "engineer", "document", "everyday",
-                                          "modeling", "standout", "patience", "goodwill"};
+    //                       begin_words {"software", "engineer", "document", "everyday",
+    //                                    "modeling", "standout", "patience", "goodwill"};
     std::vector<std::string> end_words   {"HARDware", "BEgineRX", "Mocument", "everyWay",
                                           "moBIling", "XHandout", "patENTED", "goLdMill"};
 
@@ -798,13 +805,18 @@ TEST_F(MSRIOTest, write_batch)
         }
     }
     m_msrio->config_batch({}, {}, write_cpu_idx, write_offset, write_mask);
-    std::vector<uint64_t> result;
+
     m_msrio->write_batch(write_value);
     for (auto &ci : cpu_idx) {
         auto wi = end_words.begin();
         for (auto oi : offsets) {
-            EXPECT_EQ(0, memcmp(m_msrio->msr_space_ptr(ci, oi), (*wi).c_str(), 8));
+            EXPECT_EQ(0, memcmp(m_msrio->msr_space_ptr(ci, oi), wi->c_str(), 8));
             ++wi;
         }
     }
+
+    // errors for config_batch
+    EXPECT_THROW(m_msrio->config_batch({}, {}, write_cpu_idx, {}, {}), geopm::Exception);
+    EXPECT_THROW(m_msrio->config_batch(write_cpu_idx, {}, {}, {}, {}), geopm::Exception);
+    EXPECT_THROW(m_msrio->config_batch({}, {}, write_cpu_idx, write_offset, {}), geopm::Exception);
 }

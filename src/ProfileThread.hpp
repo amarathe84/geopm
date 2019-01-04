@@ -30,9 +30,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-
-#ifndef PROFILE_THREAD_HPP_INCLUDE
-#define PROFILE_THREAD_HPP_INCLUDE
+#ifndef PROFILETHREAD_HPP_INCLUDE
+#define PROFILETHREAD_HPP_INCLUDE
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -40,12 +39,14 @@
 
 namespace geopm
 {
+    class IPlatformTopo;
+
     class IProfileThreadTable
     {
         public:
-            IProfileThreadTable() {}
-            IProfileThreadTable(const IProfileThreadTable &other) {}
-            virtual ~IProfileThreadTable() {}
+            IProfileThreadTable() = default;
+            IProfileThreadTable(const IProfileThreadTable &other) = default;
+            virtual ~IProfileThreadTable() = default;
             virtual void enable(bool is_enabled) = 0;
             virtual void init(int num_thread, int thread_idx, size_t num_iter) = 0;
             virtual void init(int num_thread, int thread_idx, size_t num_iter, size_t chunk_size) = 0;
@@ -59,15 +60,16 @@ namespace geopm
     {
         public:
             ProfileThreadTable(size_t buffer_size, void *buffer);
+            ProfileThreadTable(IPlatformTopo &topo, size_t buffer_size, void *buffer);
             ProfileThreadTable(const ProfileThreadTable &other);
-            virtual ~ProfileThreadTable();
-            void enable(bool is_enabled);
-            void init(int num_thread, int thread_idx, size_t num_iter);
-            void init(int num_thread, int thread_idx, size_t num_iter, size_t chunk_size);
-            void init(uint32_t num_work_unit);
-            void post(void);
-            void dump(std::vector<double> &progress);
-            int num_cpu(void);
+            virtual ~ProfileThreadTable() = default;
+            void enable(bool is_enabled) override;
+            void init(int num_thread, int thread_idx, size_t num_iter) override;
+            void init(int num_thread, int thread_idx, size_t num_iter, size_t chunk_size) override;
+            void init(uint32_t num_work_unit) override;
+            void post(void) override;
+            void dump(std::vector<double> &progress) override;
+            int num_cpu(void) override;
         private:
             static int cpu_idx(void);
             uint32_t *m_buffer;

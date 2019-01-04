@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -44,7 +44,28 @@
 #include "tutorial_region.h"
 #ifdef TUTORIAL_ENABLE_MKL
 #include "mkl.h"
+#else
+// Terrible DGEMM implementation should only be used if there is no
+// BLAS support.  Build assumes that the Intel(R) Math Kernel Library
+// is the only provider of BLAS.
+static inline
+void dgemm(const char *transa, const char *transb, const int *M,
+           const int *N, const int *K, const double *alpha,
+           const double *A, const int *LDA, const double *B,
+           const int *LDB, const double *beta, double *C, const int *LDC)
+{
+#pragma omp parallel for
+    for (int i = 0; i < *M; ++i) {
+        for (int j = 0; j < *N; ++j) {
+            C[i * *LDC + j] = 0;
+            for (int k = 0; k < *K; ++k) {
+                C[i * *LDC + j] += A[i * *LDA + j] * B[j * *LDB + k];
+            }
+        }
+    }
+}
 #endif
+
 
 int tutorial_sleep(double big_o, int do_report)
 {

@@ -1,5 +1,5 @@
 #
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -39,10 +39,11 @@ if [ ! "$GEOPM_PREFIX" ]; then
     GEOPM_PREFIX=$HOME/build/geopm
 fi
 
-# GEOPM_RM: The resource manager to use to launch jobs.
-# Options are either 'ALPS' or 'SLURM'.
-if [ ! "$GEOPM_RM" ]; then
-    GEOPM_RM='SLURM'
+# GEOPM_LAUNCHER: The resource manager exe used to launch jobs.
+# Options are either 'aprun' or 'srun' for 'ALPS' or 'SLURM'
+# repectively.
+if [ ! "$GEOPM_LAUNCHER" ]; then
+    GEOPM_LAUNCHER='srun'
 fi
 
 # GEOPM_BINDIR: Diretory containing libgeopm.so.
@@ -70,7 +71,7 @@ if [ ! "$GEOPM_CFLAGS" ]; then
     GEOPM_CFLAGS="-I$GEOPM_INCLUDEDIR"
 fi
 
-# GEOPM_CFLAGS: Contains link options for geopm.
+# GEOPM_LDFLAGS: Contains link options for geopm.
 if [ ! "$GEOPM_LDFLAGS" ]; then
     GEOPM_LDFLAGS="-L$GEOPM_LIBDIR -lgeopm"
 fi

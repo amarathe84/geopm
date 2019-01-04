@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -46,13 +46,13 @@ if [ "$TRAVIS_PULL_REQUEST" == "false" ] && \
    [ $version ] && \
    [ $version != "0.0.0" ]; then
 
-    if [ "$TRAVIS_REPO_SLUG" == "geopm/geopm" ] && \
+    if [ "$TRAVIS_REPO_SLUG" == "cmcantalupo/geopm" ] && \
        [ "$TRAVIS_BRANCH" == "master" ] && \
        git describe --exact-match >& /dev/null; then
         obs_proj=home:cmcantalupo:geopm
         obs_pkg=geopm
         do_obs=true
-    elif [ "$TRAVIS_REPO_SLUG" == "geopm/geopm" ] && \
+    elif [ "$TRAVIS_REPO_SLUG" == "cmcantalupo/geopm" ] && \
          [ "$TRAVIS_BRANCH" == "dev" ]; then
         obs_proj=home:cmcantalupo:geopm-dev
         obs_pkg=geopm-dev
@@ -65,8 +65,15 @@ if [ "$TRAVIS_PULL_REQUEST" == "false" ] && \
         obs_proj=home:bgeltz
         obs_pkg=geopm
         do_obs=true
+    elif [ "$TRAVIS_REPO_SLUG" == "dianarg/geopm" ]; then
+        obs_proj=home:dianarg:branches:home:cmcantalupo
+        obs_pkg=geopm
+        do_obs=true
+    elif [ "$TRAVIS_REPO_SLUG" == "bakerbrandond/geopm" ]; then
+        obs_proj=home:bakerbrandond:branches:home:cmcantalupo
+        obs_pkg=geopm
+        do_obs=true
     fi
-
 fi
 
 if [ "$do_obs" == "true" ]; then

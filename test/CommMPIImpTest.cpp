@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -47,23 +47,30 @@ typedef long MPI_Aint;
 typedef int MPI_Info;
 typedef int MPI_Win;
 
-#define MPI_MAX     (MPI_Op)(0x58000001)
-#define MPI_LAND    (MPI_Op)(0x58000005)
-#define MPI_UNDEFINED       (-32766)
-#define MPI_COMM_WORLD ((MPI_Comm)0x44000000)
-#define MPI_COMM_NULL      ((MPI_Comm)0x04000000)
-#define MPI_LOCK_EXCLUSIVE  234
-#define MPI_LOCK_SHARED     235
-#define MPI_CHAR           ((MPI_Datatype)0x4c000101)
-#define MPI_BYTE           ((MPI_Datatype)0x4c00010d)
-#define MPI_INT            ((MPI_Datatype)0x4c000405)
-#define MPI_DOUBLE         ((MPI_Datatype)0x4c00080b)
-#define MPI_INFO_NULL         ((MPI_Info)0x1c000000)
-#define MPI_WIN_NULL ((MPI_Win)0x20000000)
-#define MPI_MAX_ERROR_STRING   512
+#define MPI_MAX                 (MPI_Op)(0x58000001)
+#define MPI_LAND                (MPI_Op)(0x58000005)
+#define MPI_UNDEFINED           (-32766)
+#define MPI_COMM_WORLD          ((MPI_Comm)0x44000000)
+#define MPI_COMM_NULL           ((MPI_Comm)0x04000000)
+#define MPI_LOCK_EXCLUSIVE      234
+#define MPI_LOCK_SHARED         235
+#define MPI_CHAR                ((MPI_Datatype)0x4c000101)
+#define MPI_BYTE                ((MPI_Datatype)0x4c00010d)
+#define MPI_INT                 ((MPI_Datatype)0x4c000405)
+#define MPI_DOUBLE              ((MPI_Datatype)0x4c00080b)
+#define MPI_INFO_NULL           ((MPI_Info)0x1c000000)
+#define MPI_WIN_NULL            ((MPI_Win)0x20000000)
+#define MPI_MAX_ERROR_STRING    512
+typedef int                     MPI_Fint;
+#define MPI_ERR_SIZE            51
 
 extern "C"
 {
+    int geopm_is_comm_enabled(void)
+    {
+        return 1;
+    }
+
     int geopm_comm_split_ppn1(MPI_Comm comm, const char *tag, MPI_Comm *ppn1_comm)
     {
         return 0;
@@ -98,6 +105,11 @@ extern "C"
     {
         *param2 = 0;
         return 0;
+    }
+
+    MPI_Comm MPI_Comm_f2c(MPI_Fint comm)
+    {
+        return MPI_COMM_WORLD;
     }
 
 #define MPI_Error_string(p0, p1, p2) mock_error_string(p0, p1, p2)
@@ -384,7 +396,7 @@ extern "C"
 
 #include "gtest/gtest.h"
 #define GEOPM_TEST
-#include "plugin/MPIComm.cpp"
+#include "src/MPIComm.cpp"
 
 namespace geopm
 {
@@ -499,7 +511,7 @@ TEST_F(CommMPIImpTest, mpi_comm_ops)
 
     int color = MPI_UNDEFINED;
     int key = 256;
-    MPICommTestHelper split_comm(&tmp_comm, IComm::M_SPLIT_COLOR_UNDEFINED,key);
+    MPICommTestHelper split_comm(&tmp_comm, Comm::M_SPLIT_COLOR_UNDEFINED,key);
     m_params.push_back(tmp_comm.get_comm_ref());
     m_params.push_back(&color);
     m_params.push_back(&key);
@@ -958,8 +970,4 @@ TEST_F(CommMPIImpTest, mpi_win_ops)
 
     check_params();
 }
-}
-
-void geopm_factory_register(struct geopm_factory_c *factory, const geopm::IComm *in_comm, void *dl_ptr)
-{
 }

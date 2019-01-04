@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,8 +29,9 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY LOG OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef CONTROL_MESSAGE_HPP_INCLUDE
-#define CONTROL_MESSAGE_HPP_INCLUDE
+
+#ifndef CONTROLMESSAGE_HPP_INCLUDE
+#define CONTROLMESSAGE_HPP_INCLUDE
 
 #include <stdint.h>
 
@@ -39,10 +40,10 @@ enum geopm_ctl_message_e {
 };
 
 /// @brief Structure intended to be shared between
-/// the geopm runtime and the application in
+/// the GEOPM runtime and the application in
 /// order to convey status and control information.
 struct geopm_ctl_message_s {
-    /// @brief Status of the geopm runtime.
+    /// @brief Status of the GEOPM runtime.
     volatile uint32_t ctl_status;
     /// @brief Status of the application.
     volatile uint32_t app_status;
@@ -60,49 +61,50 @@ namespace geopm
     class IControlMessage
     {
         public:
-            IControlMessage() {}
-            virtual ~IControlMessage() {}
+            IControlMessage() = default;
+            virtual ~IControlMessage() = default;
             /// @brief Signal an advance to next phase in runtime.
             virtual void step(void) = 0;
             /// @brief Wait for message that other side has advanced
             /// to next phase in runtime.
             virtual void wait(void) = 0;
+            virtual void abort(void) = 0;
             /// @brief Set the rank running on a logical CPU.
             ///
             /// @param [in] cpu_idx Linux logical CPU index.
             ///
-            /// @param [in] MPI rank running on the given CPU.
+            /// @param [in] rank MPI rank running on the given CPU.
             virtual void cpu_rank(int cpu_idx, int rank) = 0;
             /// @brief Get the rank running on a logical CPU.
             ///
             /// @param [in] cpu_idx Linux logical CPU index.
             ///
             /// @return Returns the MPI rank running on the given CPU.
-            virtual int cpu_rank(int cpu_idx) = 0;
-            /// @brief Used by controller to query if application has
+            virtual int cpu_rank(int cpu_idx) const = 0;
+            /// @brief Used by Controller to query if application has
             /// begun sampling.
             ///
             /// @return Returns true if application has begun putting
             /// samples in the table and false otherwise.
-            virtual bool is_sample_begin(void) = 0;
-            /// @brief Used by controller to query if application has
+            virtual bool is_sample_begin(void) const = 0;
+            /// @brief Used by Controller to query if application has
             /// stopped sampling.
             ///
             /// @return Returns true if application has stopped
             /// putting samples in the table and false otherwise.
-            virtual bool is_sample_end(void) = 0;
-            /// @brief Used by controller to query if application has
+            virtual bool is_sample_end(void) const = 0;
+            /// @brief Used by Controller to query if application has
             /// begun sending region names.
             ///
             /// @return Returns true if application has begun sending
             /// region names across the table and false otherwise.
-            virtual bool is_name_begin(void) = 0;
-            /// @brief Used by controller to query if application is
+            virtual bool is_name_begin(void) const = 0;
+            /// @brief Used by Controller to query if application is
             /// ready to shutdown.
             ///
             /// @return Returns true if application is ready to
             /// shutdown and false otherwise.
-            virtual bool is_shutdown(void) = 0;
+            virtual bool is_shutdown(void) const = 0;
             /// @brief Used to synchronize passing region names across
             /// the table.
             ///
@@ -131,35 +133,38 @@ namespace geopm
             /// the caller is the controller or the lowest application
             /// rank on the node and false if the caller is any other
             /// application rank.
-            ControlMessage(struct geopm_ctl_message_s *ctl_msg, bool is_ctl, bool is_writer);
+            ControlMessage(struct geopm_ctl_message_s &ctl_msg, bool is_ctl, bool is_writer);
             /// @brief ControlMessage virtual destructor
-            virtual ~ControlMessage();
-            void step();
-            void wait();
-            void cpu_rank(int cpu_idx, int rank);
-            int cpu_rank(int cpu_idx);
-            bool is_sample_begin(void);
-            bool is_sample_end(void);
-            bool is_name_begin(void);
-            bool is_shutdown(void);
-            void loop_begin(void);
-        protected:
-            int this_status();
+            virtual ~ControlMessage() = default;
+            void step() override;
+            void wait() override;
+            void abort(void) override;
+            void cpu_rank(int cpu_idx, int rank) override;
+            int cpu_rank(int cpu_idx) const override;
+            bool is_sample_begin(void) const override;
+            bool is_sample_end(void) const override;
+            bool is_name_begin(void) const override;
+            bool is_shutdown(void) const override;
+            void loop_begin(void) override;
             /// @brief Enum encompassing application and
-            /// geopm runtime state.
+            /// GEOPM runtime state.
             enum m_status_e {
-                M_STATUS_UNDEFINED = 0,
-                M_STATUS_MAP_BEGIN = 1,
-                M_STATUS_MAP_END = 2,
-                M_STATUS_SAMPLE_BEGIN = 3,
-                M_STATUS_SAMPLE_END = 4,
-                M_STATUS_NAME_BEGIN = 5,
-                M_STATUS_NAME_LOOP_BEGIN = 6,
-                M_STATUS_NAME_LOOP_END = 7,
-                M_STATUS_NAME_END = 8,
-                M_STATUS_SHUTDOWN = 9,
+                M_STATUS_UNDEFINED,
+                M_STATUS_MAP_BEGIN,
+                M_STATUS_MAP_END,
+                M_STATUS_SAMPLE_BEGIN,
+                M_STATUS_SAMPLE_END,
+                M_STATUS_NAME_BEGIN,
+                M_STATUS_NAME_LOOP_BEGIN,
+                M_STATUS_NAME_LOOP_END,
+                M_STATUS_NAME_END,
+                M_STATUS_SHUTDOWN,
+                M_STATUS_ABORT = 9999,
             };
-            struct geopm_ctl_message_s *m_ctl_msg;
+        private:
+            int this_status() const;
+            const double M_WAIT_SEC;
+            struct geopm_ctl_message_s &m_ctl_msg;
             bool m_is_ctl;
             bool m_is_writer;
             int m_last_status;

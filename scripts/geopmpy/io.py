@@ -1,5 +1,5 @@
 #
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -39,10 +39,22 @@ import re
 import pandas
 import numpy
 import glob
-import json
 import sys
+import subprocess
+import psutil
 from natsort import natsorted
 from geopmpy import __version__
+
+
+try:
+    _, os.environ['COLUMNS'] = subprocess.check_output(['stty', 'size']).split()
+except subprocess.CalledProcessError:
+    os.environ['COLUMNS'] = "200"
+
+pandas.set_option('display.width', int(os.environ['COLUMNS']))
+pandas.set_option('display.max_colwidth', 80)
+pandas.set_option('max_columns', 100)
+
 
 class AppOutput(object):
     """The container class for all report and trace related data.
@@ -55,8 +67,7 @@ class AppOutput(object):
     Additionally a Pandas DataFrame is constructed containing all of
     the report data and a separate DataFrame containing all of the
     trace data.  These DataFrames are indexed based on the version of
-    GEOPM found in the files, the profile name, global power budget
-    set for the run, the tree and leaf deciders used, and the number
+    GEOPM found in the files, the profile name, agent name, and the number
     of times that particular configuration has been seen by the parser
     (i.e. experiment iteration).
 
@@ -67,105 +78,218 @@ class AppOutput(object):
         verbose: A bool to control whether verbose output is printed to stdout.
 
     """
-    def __init__(self, report_glob=None, trace_glob=None, dir_name='.', verbose=False):
+
+    def __init__(self, reports=None, traces=None, dir_name='.', verbose=False, do_cache=True):
         self._reports = {}
         self._reports_df = pandas.DataFrame()
         self._traces = {}
         self._traces_df = pandas.DataFrame()
         self._all_paths = []
-        self._reports_df_list = []
-        self._traces_df_list = []
         self._index_tracker = IndexTracker()
+        self._node_names = None
+        self._region_names = None
 
-        if report_glob == '':
-            report_glob = '*report-*'
-        if report_glob:
-            report_glob = os.path.join(dir_name, report_glob)
-            report_files = natsorted(glob.glob(report_glob))
-            self._all_paths.extend(report_files)
+        if reports:
+            if type(reports) is str:
+                report_glob = os.path.join(dir_name, reports)
+                report_paths = natsorted(glob.glob(report_glob))
+                if len(report_paths) == 0:
+                    raise RuntimeError('No report files found with pattern {}.'.format(report_glob))
+            elif type(reports) is list:
+                report_paths = [os.path.join(dir_name, path) for path in reports]
+            else:
+                raise TypeError('AppOutput: reports must be a list of paths or a glob pattern')
 
-            if len(report_files) == 0:
-                raise RuntimeError('No report files found with pattern {}.'.format(report_glob))
+            self._all_paths.extend(report_paths)
 
-            # Create a dict of <NODE_NAME> : <REPORT_OBJ>; Create DF
-            files = 0
-            filesize = 0
-            for rf in report_files: # Get report count for verbose progress
-                filesize += os.stat(rf).st_size
-                with open(rf, 'r') as fid:
-                    for line in fid:
-                        if re.findall(r'Host:', line):
-                            files += 1
+            if do_cache:
+                # unique cache name based on report files in this list
+                # if all reports share a directory, put cache there
+                dirs = set()
+                for rr in report_paths:
+                    dirs.add(rr)
+                dirs = list(dirs)
+                h5_dir = dirs[0] if len(dirs) == 1 else '.'
+                paths_str = str(report_paths)
+                report_h5_name = os.path.join(dir_name, 'report_{}.h5'.format(hash(paths_str)))
+                self._all_paths.append(report_h5_name)
 
-            filesize = '{}KiB'.format(filesize/1024)
-            fileno = 1
-            for rf in report_files:
-                # Parse the first report
-                rr_size = os.stat(rf).st_size
-                rr = Report(rf)
-                if verbose:
-                    sys.stdout.write('\rParsing report {} of {} ({}).. '.format(fileno, files, filesize))
-                    sys.stdout.flush()
-                fileno += 1
-                self.add_report_df(rr)
-                self._reports[rr.get_node_name()] = rr
+                # check if cache is older than reports
+                if os.path.exists(report_h5_name):
+                    cache_mod_time = os.path.getmtime(report_h5_name)
+                    regen_cache = False
+                    for report_file in report_paths:
+                        mod_time = os.path.getmtime(report_file)
+                        if mod_time > cache_mod_time:
+                            regen_cache = True
+                    if regen_cache:
+                        os.remove(report_h5_name)
 
-                # Parse the remaining reports in this file
-                while (rr.get_last_offset() != rr_size):
-                    rr = Report(rf, rr.get_last_offset())
-                    if rr.get_node_name() is not None:
-                        self.add_report_df(rr)
-                        self._reports[rr.get_node_name()] = rr
+                try:
+                    # load dataframes from cache
+                    self._reports_df = pandas.read_hdf(report_h5_name, 'report')
+                    self._app_reports_df = pandas.read_hdf(report_h5_name, 'app_report')
+                    if verbose:
+                        sys.stdout.write('Loaded reports from {}.\n'.format(report_h5_name))
+                except IOError as err:
+                    sys.stderr.write('<geopmpy>: Warning: report HDF5 file not detected or older than reports.  Data will be saved to {}.\n'
+                                     .format(report_h5_name))
+                    self.parse_reports(report_paths, verbose)
+
+                    # Cache report dataframe
+                    try:
                         if verbose:
-                            sys.stdout.write('\rParsing report {} of {} ({})... '.format(fileno, files, filesize))
-                            sys.stdout.flush()
-                        fileno += 1
-                Report.reset_vars() # If we've reached the end of a report, reset the static vars
-            if verbose:
-                sys.stdout.write('Done.\n')
-                sys.stdout.flush()
+                            sys.stdout.write('Generating HDF5 files... ')
+                            self._reports_df.to_hdf(report_h5_name, 'report', format='table')
+                            self._app_reports_df.to_hdf(report_h5_name, 'app_report', format='table', append=True)
+                    except ImportError as error:
+                        sys.stderr.write('<geopmy> Warning: unable to write HDF5 file: {}\n'.format(str(error)))
 
-            if verbose:
-                sys.stdout.write('Creating combined reports DF... ')
-                sys.stdout.flush()
-            self._reports_df = pandas.concat(self._reports_df_list)
-            self._reports_df = self._reports_df.sort_index(ascending=True)
-            if verbose:
-                sys.stdout.write('Done.\n')
-                sys.stdout.flush()
+                    if verbose:
+                        sys.stdout.write('Done.\n')
+                        sys.stdout.flush()
+            else:
+                self.parse_reports(report_paths, verbose)
 
-        if trace_glob == '':
-            trace_glob = '*trace-*'
-        if trace_glob:
-            trace_glob = os.path.join(dir_name, trace_glob)
-            self._index_tracker.reset()
-            trace_paths = natsorted(glob.glob(trace_glob))
+        if traces:
+            if type(traces) is str:
+                trace_glob = os.path.join(dir_name, traces)
+                trace_paths = natsorted(glob.glob(trace_glob))
+                if len(trace_paths) == 0:
+                    raise RuntimeError('No trace files found with pattern {}.'.format(trace_glob))
+            elif type(traces) is list:
+                trace_paths = [os.path.join(dir_name, path) for path in traces]
+            else:
+                raise TypeError('AppOutput: traces must be a list of paths or a glob pattern')
+
             self._all_paths.extend(trace_paths)
-            # Create a dict of <NODE_NAME> : <TRACE_DATAFRAME>
-            fileno = 1
-            filesize = 0
-            for tp in trace_paths: # Get size of all trace files
-                filesize += os.stat(tp).st_size
-            filesize = '{}MiB'.format(filesize/1024/1024)
-            for tp in trace_paths:
-                if verbose:
-                    sys.stdout.write('\rParsing trace file {} of {} ({})... '.format(fileno, len(trace_paths), filesize))
-                    sys.stdout.flush()
-                fileno += 1
-                tt = Trace(tp)
-                self._traces[tt.get_node_name()] = tt.get_df() # Basic dict assumes one node per trace
-                self.add_trace_df(tt) # Handles multiple traces per node
+            self._index_tracker.reset()
+
+            if do_cache:
+                # unique cache name based on trace files in this list
+                dirs = set()
+                for rr in trace_paths:
+                    dirs.add(rr)
+                dirs = list(dirs)
+                h5_dir = dirs[0] if len(dirs) == 1 else '.'
+                paths_str = str(trace_paths)
+                trace_h5_name = os.path.join(dir_name, 'trace_{}.h5'.format(hash(paths_str)))
+                self._all_paths.append(trace_h5_name)
+
+                # check if cache is older than traces
+                if os.path.exists(trace_h5_name):
+                    cache_mod_time = os.path.getmtime(trace_h5_name)
+                    regen_cache = False
+                    for trace_file in trace_paths:
+                        mod_time = os.path.getmtime(trace_file)
+                        if mod_time > cache_mod_time:
+                            regen_cache = True
+                    if regen_cache:
+                        os.remove(trace_h5_name)
+
+                try:
+                    self._traces_df = pandas.read_hdf(trace_h5_name, 'trace')
+                    if verbose:
+                        sys.stdout.write('Loaded reports from {}.\n'.format(report_h5_name))
+                except IOError as err:
+                    sys.stderr.write('<geopmpy> Warning: trace HDF5 file not detected or older than traces.  Data will be saved to {}.\n'
+                                     .format(trace_h5_name))
+
+                    self.parse_traces(trace_paths, verbose)
+                    # Cache traces dataframe
+                    try:
+                        if verbose:
+                            sys.stdout.write('Generating HDF5 files... ')
+                        self._traces_df.to_hdf(trace_h5_name, 'trace')
+                    except ImportError as error:
+                        sys.stderr.write('<geopmpy> Warning: unable to write HDF5 file: {}\n'.format(str(error)))
+
+                    if verbose:
+                        sys.stdout.write('Done.\n')
+                        sys.stdout.flush()
+            else:
+                self.parse_traces(trace_paths, verbose)
+
+    def parse_reports(self, report_paths, verbose):
+        reports_df_list = []
+        reports_app_df_list = []
+        files = 0
+        filesize = 0
+        for rp in report_paths:  # Get report count for verbose progress
+            filesize += os.stat(rp).st_size
+            with open(rp, 'r') as fid:
+                for line in fid:
+                    if re.findall(r'Host:', line):
+                        files += 1
+
+        filesize = '{}KiB'.format(filesize/1024)
+        fileno = 1
+        for rp in report_paths:
+            # Parse the first report
+            rr_size = os.stat(rp).st_size
+            rr = Report(rp)
             if verbose:
-                sys.stdout.write('Done.\n')
+                sys.stdout.write('\rParsing report {} of {} ({})... '.format(fileno, files, filesize))
                 sys.stdout.flush()
+            fileno += 1
+            self.add_report_df(rr, reports_df_list, reports_app_df_list)
+            # Parse the remaining reports in this file
+            while (rr.get_last_offset() != rr_size):
+                rr = Report(rp, rr.get_last_offset())
+                if rr.get_node_name() is not None:
+                    self.add_report_df(rr, reports_df_list, reports_app_df_list)
+                    if verbose:
+                        sys.stdout.write('\rParsing report {} of {} ({})... '.format(fileno, files, filesize))
+                        sys.stdout.flush()
+                    fileno += 1
+            Report.reset_vars()  # If we've reached the end of a report, reset the static vars
+        if verbose:
+            sys.stdout.write('Done.\n')
+            sys.stdout.flush()
+
+        if verbose:
+            sys.stdout.write('Creating combined reports DF... ')
+            sys.stdout.flush()
+        self._reports_df = pandas.concat(reports_df_list)
+        self._reports_df = self._reports_df.sort_index(ascending=True)
+        self._app_reports_df = pandas.concat(reports_app_df_list)
+        self._app_reports_df = self._app_reports_df.sort_index(ascending=True)
+        if verbose:
+            sys.stdout.write('Done.\n')
+            sys.stdout.flush()
+
+    def parse_traces(self, trace_paths, verbose):
+        traces_df_list = []
+        fileno = 1
+        filesize = 0
+        for tp in trace_paths:  # Get size of all trace files
+            filesize += os.stat(tp).st_size
+        # Abort if traces are too large
+        avail_mem = psutil.virtual_memory().available
+        if filesize > avail_mem / 2:
+            sys.stderr.write('<geopmpy> Warning: Total size of traces is greater than 50% of available memory. Parsing traces will be skipped.\n')
+            return
+
+        filesize = '{}MiB'.format(filesize/1024/1024)
+
+        for tp in trace_paths:
             if verbose:
-                sys.stdout.write('Creating combined traces DF... ')
+                sys.stdout.write('\rParsing trace file {} of {} ({})... '.format(fileno, len(trace_paths), filesize))
                 sys.stdout.flush()
-            self._traces_df = pandas.concat(self._traces_df_list)
-            self._traces_df = self._traces_df.sort_index(ascending=True)
-            if verbose:
-                sys.stdout.write('Done.\n')
-                sys.stdout.flush()
+            fileno += 1
+            tt = Trace(tp)
+            self.add_trace_df(tt, traces_df_list)  # Handles multiple traces per node
+        if verbose:
+            sys.stdout.write('Done.\n')
+            sys.stdout.flush()
+        if verbose:
+            sys.stdout.write('Creating combined traces DF... ')
+            sys.stdout.flush()
+        self._traces_df = pandas.concat(traces_df_list)
+        self._traces_df = self._traces_df.sort_index(ascending=True)
+        if verbose:
+            sys.stdout.write('Done.\n')
+            sys.stdout.flush()
 
     def remove_files(self):
         """Deletes all files currently tracked by this object."""
@@ -175,7 +299,7 @@ class AppOutput(object):
             except OSError:
                 pass
 
-    def add_report_df(self, rr):
+    def add_report_df(self, rr, reports_df_list, reports_app_df_list):
         """Adds a report DataFrame to the tracking list.
 
         The report tracking list is used to create the combined
@@ -188,14 +312,30 @@ class AppOutput(object):
         """
         # Build and index the DF
         rdf = pandas.DataFrame(rr).T.drop('name', 1)
-        numeric_cols = ['count', 'energy', 'frequency', 'mpi_runtime', 'runtime']
+        numeric_cols = ['count', 'energy_pkg', 'energy_dram', 'frequency', 'mpi_runtime', 'runtime', 'sync_runtime']
         rdf[numeric_cols] = rdf[numeric_cols].apply(pandas.to_numeric)
 
         # Add extra index info
-        rdf = rdf.set_index(self._index_tracker.get_multiindex(rr))
-        self._reports_df_list.append(rdf)
+        index = self._index_tracker.get_multiindex(rr)
+        rdf = rdf.set_index(index)
+        reports_df_list.append(rdf)
 
-    def add_trace_df(self, tt):
+        # Save application totals
+        app = {'runtime': rr.get_runtime(),
+               'energy-package': rr.get_energy_pkg(),
+               'energy-dram': rr.get_energy_dram(),
+               'mpi-runtime': rr.get_mpi_runtime(),
+               'ignore-runtime': rr.get_ignore_runtime(),
+               'memory-hwm': rr.get_memory_hwm(),
+               'network-bw': rr.get_network_bw()
+              }
+        index = index.droplevel('region').drop_duplicates()
+        app_df = pandas.DataFrame(app, index=index)
+        numeric_cols = app.keys()
+        app_df[numeric_cols] = app_df[numeric_cols].apply(pandas.to_numeric)
+        reports_app_df_list.append(app_df)
+
+    def add_trace_df(self, tt, traces_df_list):
         """Adds a trace DataFrame to the tracking list.
 
         The report tracking list is used to create the combined
@@ -207,9 +347,9 @@ class AppOutput(object):
                 tracking list.
 
         """
-        tdf = tt.get_df()
+        tdf = tt.get_df()  # TODO: this needs numeric cols optimization
         tdf = tdf.set_index(self._index_tracker.get_multiindex(tt))
-        self._traces_df_list.append(tdf)
+        traces_df_list.append(tdf)
 
     def get_node_names(self):
         """Returns the names of the nodes detected in the parse report files.
@@ -226,56 +366,46 @@ class AppOutput(object):
         to get a combined DataFrame of all the data.
 
         """
-        return self._reports.keys()
+        if self._node_names is None:
+            self._node_names = self._reports_df.index.get_level_values('node_name').unique().tolist()
+        return self._node_names
 
-    def get_report(self, node_name):
-        """Getter for the current Report object in the _reports Dictionary.
+    def get_region_names(self):
+        if self._region_names is None:
+            self._region_names = self._reports_df.index.get_level_values('region').unique().tolist()
+        return self._region_names
 
-        Note that this is only useful for a single experiment's
-        dataset.  The _reports dictionary is populated from every
-        report file that was globbed, so if you have multiple
-        iterations of an experiment the last set of reports parsed
-        will be contained in this dictionary.  Additionally, if
-        different nodes were used with different experiment iterations
-        then this dictionary will not have consistent data.
+    def get_report_data(self, profile=None, agent=None, node_name=None, region=None):
+        idx = pandas.IndexSlice
+        df = self._reports_df
+        if profile is not None:
+            if type(profile) is tuple:
+                minp, maxp = profile
+                df = df.loc[idx[:, :, minp:maxp, :, :, :, :], ]
+            else:
+                df = df.loc[idx[:, :, profile, :, :, :, :], ]
+        if agent is not None:
+            df = df.loc[idx[:, :, :, agent, :, :, :], ]
+        if node_name is not None:
+            df = df.loc[idx[:, :, :, :, node_name, :, :], ]
+        if region is not None:
+            df = df.loc[idx[:, :, :, :, :, :, region], ]
+        return df
 
-        If analysis of all of the data is desired, use get_report_df()
-        to get a combined DataFrame of all the data.
+    # TODO Call this from outside code to get totals
+    def get_app_total_data(self, node_name=None):
+        idx = pandas.IndexSlice
+        df = self._app_reports_df
+        if node_name is not None:
+            df = df.loc[idx[:, :, :, :, node_name, :], ]
+        return df
 
-        Args:
-            node_name: The name of the node to use as a key in the
-                       _reports Dictionary.
-
-        Returns:
-            Report: The object for this node_name.
-
-        """
-        return self._reports[node_name]
-
-    def get_trace(self, node_name):
-        """Getter for the current Trace object in the _traces Dictonary.
-
-        Note that this is only useful for a single experiment's
-        dataset.  The _traces dictionary is populated from every trace
-        file that was globbed, so if you have multiple iterations of
-        an experiment the last set of traces parsed will be contained
-        in this dictionary.  Additionally, if different nodes were
-        used with different experiment iterations then this dictionary
-        will not have consistent data.
-
-        If analysis of all of the data is desired, use get_trace_df()
-        to get a combined DataFrame of all the data.
-
-        Args:
-
-            node_name: The name of the node to use as a key in the
-                       _traces Dictionary.
-
-        Returns:
-            Trace: The object for this node_name.
-
-        """
-        return self._traces[node_name]
+    def get_trace_data(self, node_name=None):
+        idx = pandas.IndexSlice
+        df = self._traces_df
+        if node_name is not None:
+            df = df.loc[idx[:, :, :, :, node_name, :, :], ]
+        return df
 
     def get_report_df(self):
         """Getter for the combined DataFrame of all report files parsed.
@@ -305,6 +435,22 @@ class AppOutput(object):
         """
         return self._traces_df
 
+    def extract_index_from_profile(self, inplace=False):
+        """
+        Pulls the power budget or other number out of the profile name
+        and replaces the name column of the data frame with this
+        number.
+        """
+        profile_name_map = {}
+        names_list = self._reports_df.index.get_level_values('name').unique().tolist()
+        for name in names_list:
+            # The profile name is currently set to: ${NAME}_${POWER_BUDGET}
+            profile_name_map.update({name: int(name.split('_')[-1])})
+        df = self._reports_df.rename(profile_name_map)
+        if inplace:
+            self._reports_df = df
+        return df
+
 
 class IndexTracker(object):
     """Tracks and uniquely identifies experiment configurations for
@@ -320,7 +466,7 @@ class IndexTracker(object):
 
     The parsed data is used to extract the following fields to build
     the tracking index tuple:
-        (<GEOPM_VERSION>, <PROFILE_NAME>, <POWER_BUDGET> , <TREE_DECIDER>, <LEAF_DECIDER>, <NODE_NAME>)
+        (<GEOPM_VERSION>, <PROFILE_NAME>, <AGENT_NAME>, <NODE_NAME>)
 
     If the tuple not contained in the _run_outputs dict, it is
     inserted with a value of 1.  The value is incremented if the tuple
@@ -329,7 +475,7 @@ class IndexTracker(object):
     MultiIndex is created.
 
     """
-    def __init__ (self):
+    def __init__(self):
         self._run_outputs = {}
 
     def _check_increment(self, run_output):
@@ -340,11 +486,10 @@ class IndexTracker(object):
 
         Args:
             run_output: The Report or Trace object to be tracked.
-
         """
-        index = (run_output.get_version(), os.path.basename(run_output.get_profile_name()), run_output.get_power_budget(),
-                 run_output.get_tree_decider(), run_output.get_leaf_decider(), run_output.get_node_name())
-
+        index = (run_output.get_version(), run_output.get_start_time(),
+                 os.path.basename(run_output.get_profile_name()),
+                 run_output.get_agent(), run_output.get_node_name())
         if index not in self._run_outputs.keys():
             self._run_outputs[index] = 1
         else:
@@ -357,7 +502,7 @@ class IndexTracker(object):
         Takes a run_output as input, and returns the unique tuple to
         identify this run_output in the DataFrame.  Note that this
         method appends the current experiment iteration to the end of
-        the returned tuple.  E.g.: 
+        the returned tuple.  E.g.:
 
         >>> self._index_tracker.get_base_index(rr)
         ('0.1.1+dev365gfcda929', 'geopm_test_integration', 170,
@@ -371,8 +516,9 @@ class IndexTracker(object):
                 count of how many times this experiment has been seen.
 
         """
-        key = (run_output.get_version(), os.path.basename(run_output.get_profile_name()), run_output.get_power_budget(),
-               run_output.get_tree_decider(), run_output.get_leaf_decider(), run_output.get_node_name())
+        key = (run_output.get_version(), run_output.get_start_time(),
+               os.path.basename(run_output.get_profile_name()),
+               run_output.get_agent(), run_output.get_node_name())
 
         return key + (self._run_outputs[key], )
 
@@ -398,15 +544,15 @@ class IndexTracker(object):
         self._check_increment(run_output)
 
         itl = []
-        index_names = ['version', 'name', 'power_budget', 'tree_decider', 'leaf_decider', 'node_name', 'iteration']
+        index_names = ['version', 'start_time', 'name', 'agent', 'node_name', 'iteration']
 
         if type(run_output) is Report:
             index_names.append('region')
-            for region in sorted(run_output.keys()): # Pandas sorts the keys when a DF is created
-                itl.append(self._get_base_index(run_output) + (region, )) # Append region to the existing tuple
-        else: # Trace file index
+            for region in sorted(run_output.keys()):  # Pandas sorts the keys when a DF is created
+                itl.append(self._get_base_index(run_output) + (region, ))  # Append region to the existing tuple
+        else:  # Trace file index
             index_names.append('index')
-            for ii in range(len(run_output.get_df())): # Append the integer index to the DataFrame index
+            for ii in range(len(run_output.get_df())):  # Append the integer index to the DataFrame index
                 itl.append(self._get_base_index(run_output) + (ii, ))
 
         mi = pandas.MultiIndex.from_tuples(itl, names=index_names)
@@ -443,14 +589,11 @@ class Report(dict):
 
     """
     # These variables are intentionally defined outside __init__().  They occur once at the top of a combined report
-    # file and are needed for all report contained in the combined file.  Defining them this way allows the iinitial
+    # file and are needed for all report contained in the combined file.  Defining them this way allows the initial
     # value to be shared among all Report files created.
     _version = None
     _name = None
-    _mode = None
-    _tree_decider = None
-    _leaf_decider = None
-    _power_budget = None
+    _agent = None
 
     @staticmethod
     def reset_vars():
@@ -459,27 +602,28 @@ class Report(dict):
         these fields may change.
 
         """
-        (Report._version, Report._profile_name, Report._mode, Report._tree_decider, Report._leaf_decider, Report._power_budget) = \
-            None, None, None, None, None, None
+        (Report._version, Report._name, Report._agent) = \
+            None, None, None
 
     def __init__(self, report_path, offset=0):
         super(Report, self).__init__()
         self._path = report_path
         self._offset = offset
         self._version = None
+        self._start_time = None
         self._profile_name = None
-        self._mode = None
-        self._tree_decider = None
-        self._leaf_decider = None
-        self._power_budget = None
+        self._agent = None
         self._total_runtime = None
-        self._total_energy = None
+        self._total_energy_pkg = None
+        self._total_energy_dram = None
         self._total_ignore_runtime = None
         self._total_mpi_runtime = None
+        self._total_memory_hwm = None
+        self._total_network_bw = None
         self._node_name = None
 
         found_totals = False
-        (region_name, region_id, runtime, energy, frequency, mpi_runtime, count) = None, None, None, None, None, None, None
+        (region_name, region_id, runtime, sync_runtime, energy_pkg, energy_dram, frequency, mpi_runtime, count) = None, None, None, None, None, None, None, None, None
         float_regex = r'([-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?)'
 
         with open(self._path, 'r') as fid:
@@ -490,79 +634,95 @@ class Report(dict):
                     match = re.search(r'^##### geopm (\S+) #####$', line)
                     if match is not None:
                         self._version = match.group(1)
-                elif self._profile_name is None:
+                if self._start_time is None:
+                    match = re.search(r'^Start Time: (\S+)$', line)
+                    if match is not None:
+                        self._start_time = match.group(1)
+                if self._profile_name is None:
                     match = re.search(r'^Profile: (\S+)$', line)
                     if match is not None:
                         self._profile_name = match.group(1)
-                elif self._mode is None:
-                    match = re.search(r'^Policy Mode: (\S+)$', line)
+                if self._agent is None:
+                    match = re.search(r'^Agent: (\S+)$', line)
                     if match is not None:
-                        self._mode = match.group(1)
-                elif self._tree_decider is None:
-                    match = re.search(r'^Tree Decider: (\S+)$', line)
-                    if match is not None:
-                        self._tree_decider = match.group(1)
-                elif self._leaf_decider is None:
-                    match = re.search(r'^Leaf Decider: (\S+)$', line)
-                    if match is not None:
-                        self._leaf_decider = match.group(1)
-                elif self._power_budget is None:
-                    match = re.search(r'^Power Budget: (\S+)$', line)
-                    if match is not None:
-                        self._power_budget = int(match.group(1))
+                        self._agent = match.group(1)
                 if self._node_name is None:
                     match = re.search(r'^Host: (\S+)$', line)
                     if match is not None:
                         self._node_name = match.group(1)
-                elif region_name is None:
-                    match = re.search(r'^Region (\S+) \(([0-9]+)\):', line)
+                if region_name is None:
+                    match = re.search(r'^Region (\S+) \((0x)?([0-9a-fA-F]+)\):', line)
                     if match is not None:
                         region_name = match.group(1)
-                        region_id = match.group(2)
-                elif runtime is None:
+                        if match.group(2) is None:
+                            region_id = match.group(3)
+                        else:
+                            region_id = match.group(2) + match.group(3)
+                if runtime is None:
                     match = re.search(r'^\s+runtime.+: ' + float_regex, line)
                     if match is not None:
                         runtime = float(match.group(1))
-                elif energy is None:
-                    match = re.search(r'^\s+energy.+: ' + float_regex, line)
+                if sync_runtime is None:
+                    match = re.search(r'^\s+sync-runtime.+: ' + float_regex, line)
                     if match is not None:
-                        energy = float(match.group(1))
-                elif frequency is None:
+                        sync_runtime = float(match.group(1))
+                if energy_pkg is None:
+                    match = re.search(r'^\s+package-energy.+: ' + float_regex, line)
+                    if match is not None:
+                        energy_pkg = float(match.group(1))
+                if energy_dram is None:
+                    match = re.search(r'^\s+dram-energy.+: ' + float_regex, line)
+                    if match is not None:
+                        energy_dram = float(match.group(1))
+                if frequency is None:
                     match = re.search(r'^\s+frequency.+: ' + float_regex, line)
                     if match is not None:
                         frequency = float(match.group(1))
-                elif mpi_runtime is None:
+                if mpi_runtime is None:
                     match = re.search(r'^\s+mpi-runtime.+: ' + float_regex, line)
                     if match is not None:
                         mpi_runtime = float(match.group(1))
-                elif count is None:
+                if count is None:
                     match = re.search(r'^\s+count: ' + float_regex, line)
                     if match is not None:
                         count = float(match.group(1))
-                        self[region_name] = Region(region_name, region_id, runtime, energy, frequency, mpi_runtime, count)
-                        (region_name, region_id, runtime, energy, frequency, mpi_runtime, count) = \
-                            None, None, None, None, None, None, None
+                        self[region_name] = Region(region_name, region_id, runtime, sync_runtime, energy_pkg, energy_dram, frequency, mpi_runtime, count)
+                        (region_name, region_id, runtime, sync_runtime, energy_pkg, energy_dram, frequency, mpi_runtime, count) = \
+                            None, None, None, None, None, None, None, None, None
                 if not found_totals:
                     match = re.search(r'^Application Totals:$', line)
                     if match is not None:
                         found_totals = True
-                elif self._total_runtime is None:
-                    match = re.search(r'\s+runtime.+: ' + float_regex, line)
-                    if match is not None:
-                        self._total_runtime = float(match.group(1))
-                elif self._total_energy is None:
-                    match = re.search(r'\s+energy.+: ' + float_regex, line)
-                    if match is not None:
-                        self._total_energy = float(match.group(1))
-                elif self._total_mpi_runtime is None:
-                    match = re.search(r'\s+mpi-runtime.+: ' + float_regex, line)
-                    if match is not None:
-                        self._total_mpi_runtime = float(match.group(1))
-                elif self._total_ignore_runtime is None:
-                    match = re.search(r'\s+ignore-time.+: ' + float_regex, line)
-                    if match is not None:
-                        self._total_ignore_runtime = float(match.group(1))
-                        break # End of report blob
+                else:
+                    if self._total_runtime is None:
+                        match = re.search(r'\s+runtime.+: ' + float_regex, line)
+                        if match is not None:
+                            self._total_runtime = float(match.group(1))
+                    if self._total_energy_pkg is None:
+                        match = re.search(r'\s+package-energy.+: ' + float_regex, line)
+                        if match is not None:
+                            self._total_energy_pkg = float(match.group(1))
+                    if self._total_energy_dram is None:
+                        match = re.search(r'\s+dram-energy.+: ' + float_regex, line)
+                        if match is not None:
+                            self._total_energy_dram = float(match.group(1))
+                    if self._total_mpi_runtime is None:
+                        match = re.search(r'\s+mpi-runtime.+: ' + float_regex, line)
+                        if match is not None:
+                            self._total_mpi_runtime = float(match.group(1))
+                    if self._total_ignore_runtime is None:
+                        match = re.search(r'\s+ignore-time.+: ' + float_regex, line)
+                        if match is not None:
+                            self._total_ignore_runtime = float(match.group(1))
+                    if self._total_memory_hwm is None:
+                        match = re.search(r'\s+geopmctl memory HWM: ' + float_regex + ' kB$', line)
+                        if match is not None:
+                            self._total_memory_hwm = float(match.group(1))
+                    if self._total_network_bw is None:
+                        match = re.search(r'\s+geopmctl network BW.+: ' + float_regex, line)
+                        if match is not None:
+                            self._total_network_bw = float(match.group(1))
+                            break # End of report blob
 
                 line = fid.readline()
             self._offset = fid.tell()
@@ -580,44 +740,40 @@ class Report(dict):
             Report._profile_name = self._profile_name
         else:
             raise SyntaxError('Unable to parse name information from report!')
-        if self._mode is None and Report._mode:
-            self._mode = Report._mode
-        elif self._mode:
-            Report._mode = self._mode
+        if self._agent is None and Report._agent:
+            self._agent = Report._agent
+        elif self._agent:
+            Report._agent = self._agent
         else:
-            raise SyntaxError('Unable to parse mode information from report!')
-        if self._tree_decider is None and Report._tree_decider:
-            self._tree_decider = Report._tree_decider
-        elif self._tree_decider:
-            Report._tree_decider = self._tree_decider
-        else:
-            raise SyntaxError('Unable to parse tree_decider information from report!')
-        if self._leaf_decider is None and Report._leaf_decider:
-            self._leaf_decider = Report._leaf_decider
-        elif self._leaf_decider:
-            Report._leaf_decider = self._leaf_decider
-        else:
-            raise SyntaxError('Unable to parse leaf_decider information from report!')
-        if self._power_budget is None and Report._power_budget:
-            self._power_budget = Report._power_budget
-        elif self._power_budget:
-            Report._power_budget = self._power_budget
-        else:
-            raise SyntaxError('Unable to parse power_budget information from report!')
+            raise SyntaxError('Unable to parse agent information from report!')
 
+        # TODO: temporary hack to use old data
+        if self._total_energy_dram is None:
+            self._total_energy_dram = 0
         if (len(line) != 0 and (region_name is not None or not found_totals or
-            None in (self._total_runtime, self._total_energy, self._total_ignore_runtime, self._total_mpi_runtime))):
+            None in (self._total_runtime, self._total_energy_pkg, self._total_energy_dram, self._total_ignore_runtime, self._total_mpi_runtime))):
             raise SyntaxError('Unable to parse report {} before offset {}: '.format(self._path, self._offset))
 
+    # Fields used for dataframe construction only
     def get_profile_name(self):
         return self._profile_name
+
+    def get_start_time(self):
+        return self._start_time
 
     def get_version(self):
         return self._version
 
-    def get_path(self):
-        return self._path
+    def get_agent(self):
+        return self._agent
 
+    def get_node_name(self):
+        return self._node_name
+
+    def get_last_offset(self):
+        return self._offset
+
+    # Application totals
     def get_runtime(self):
         return self._total_runtime
 
@@ -627,26 +783,17 @@ class Report(dict):
     def get_mpi_runtime(self):
         return self._total_mpi_runtime
 
-    def get_energy(self):
-        return self._total_energy
+    def get_energy_pkg(self):
+        return self._total_energy_pkg
 
-    def get_node_name(self):
-        return self._node_name
+    def get_energy_dram(self):
+        return self._total_energy_dram
 
-    def get_last_offset(self):
-        return self._offset
+    def get_memory_hwm(self):
+        return self._total_memory_hwm
 
-    def get_mode(self):
-        return self._mode
-
-    def get_tree_decider(self):
-        return self._tree_decider
-
-    def get_leaf_decider(self):
-        return self._leaf_decider
-
-    def get_power_budget(self):
-        return self._power_budget
+    def get_network_bw(self):
+        return self._total_network_bw
 
 
 class Region(dict):
@@ -656,7 +803,10 @@ class Region(dict):
         name: The name of the region.
         rid: The numeric ID of the region.
         runtime: The accumulated time of the region in seconds.
-        energy: The accumulated energy from this region in Joules.
+        energy_pkg: The accumulated package energy from this region in
+                    Joules.
+        energy_dram: The accumulated DRAM energy from this region in
+                     Joules.
         frequency: The average frequency achieved during this region
                    in terms of percent of sticker frequency.
         mpi_runtime: The accumulated time in this region executing MPI
@@ -664,12 +814,14 @@ class Region(dict):
         count: The number of times this region has been entered.
 
     """
-    def __init__(self, name, rid, runtime, energy, frequency, mpi_runtime, count):
+    def __init__(self, name, rid, runtime, sync_runtime, energy_pkg, energy_dram, frequency, mpi_runtime, count):
         super(Region, self).__init__()
         self['name'] = name
         self['id'] = rid
         self['runtime'] = float(runtime)
-        self['energy'] = float(energy)
+        self['sync_runtime'] = float(sync_runtime) if sync_runtime is not None else runtime
+        self['energy_pkg'] = float(energy_pkg)
+        self['energy_dram'] = float(energy_dram) if energy_dram is not None else 0
         self['frequency'] = float(frequency)
         self['mpi_runtime'] = float(mpi_runtime)
         self['count'] = int(count)
@@ -678,7 +830,9 @@ class Region(dict):
         template = """\
 {name} ({rid})
   runtime     : {runtime}
-  energy      : {energy}
+  sync-runtime : {sync_runtime}
+  package-energy : {energy_pkg}
+  dram-energy : {energy_dram}
   frequency   : {frequency}
   mpi-runtime : {mpi_runtime}
   count       : {count}
@@ -686,7 +840,9 @@ class Region(dict):
         return template.format(name=self['name'],
                                rid=self['id'],
                                runtime=self['runtime'],
-                               energy=self['energy'],
+                               sync_runtime=self['sync_runtime'],
+                               energy_pkg=self['energy_pkg'],
+                               energy_dram=self['energy_dram'],
                                frequency=self['frequency'],
                                mpi_runtime=self['mpi_runtime'],
                                count=self['count'])
@@ -703,8 +859,14 @@ class Region(dict):
     def get_runtime(self):
         return self['runtime']
 
-    def get_energy(self):
-        return self['energy']
+    def get_sync_runtime(self):
+        return self['sync_runtime']
+
+    def get_energy_pkg(self):
+        return self['energy_pkg']
+
+    def get_energy_dram(self):
+        return self['energy_dram']
 
     def get_frequency(self):
         return self['frequency']
@@ -731,19 +893,18 @@ class Trace(object):
 
     Attributes:
         trace_path: The path to the trace file to parse.
-
     """
-    def __init__(self, trace_path):
+    def __init__(self, trace_path, use_agent=True):
         self._path = trace_path
-        self._df = pandas.read_csv(trace_path, sep='|', comment='#', dtype={'region_id ' : str})
-        self._df.columns = list(map(str.strip, self._df[:0])) # Strip whitespace from column names
-        self._df['region_id'] = self._df['region_id'].astype(str).map(str.strip) # Strip whitespace from region ID's
+        self._df = pandas.read_csv(trace_path, sep='|', comment='#', dtype={'region_id': str})  # region_id must be a string because pandas can't handle 64-bit integers
+        self._df.columns = list(map(str.strip, self._df[:0]))  # Strip whitespace from column names
+        self._df['region_id'] = self._df['region_id'].astype(str).map(str.strip)  # Strip whitespace from region ID's
         self._version = None
+        self._start_time = None
         self._profile_name = None
-        self._power_budget = None
-        self._tree_decider = None
-        self._leaf_decider = None
+        self._agent = None
         self._node_name = None
+        self._use_agent = use_agent
         self._parse_header(trace_path)
 
     def __repr__(self):
@@ -770,13 +931,13 @@ class Trace(object):
 
         This allows standard DataFrame slicing operations to take place.
 
-        >>> tt[['region_id', 'seconds', 'pkg_energy-0', 'dram_energy-0']][:5]
-                     region_id   seconds   pkg_energy-0  dram_energy-0
-        0  2305843009213693952  0.662906  106012.363770   25631.015519
-        1  2305843009213693952  0.667854  106012.873718   25631.045777
-        2  2305843009213693952  0.672882  106013.411621   25631.075807
-        3  2305843009213693952  0.677869  106013.998108   25631.105882
-        4  2305843009213693952  0.682849  106014.621704   25631.136186
+        >>> tt[['region_id', 'time', 'energy_package', 'energy_dram']][:5]
+                     region_id      time  energy_package-0  energy_dram-0
+        0  2305843009213693952  0.662906     106012.363770   25631.015519
+        1  2305843009213693952  0.667854     106012.873718   25631.045777
+        2  2305843009213693952  0.672882     106013.411621   25631.075807
+        3  2305843009213693952  0.677869     106013.998108   25631.105882
+        4  2305843009213693952  0.682849     106014.621704   25631.136186
         """
         return self._df.__getitem__(key)
 
@@ -784,7 +945,7 @@ class Trace(object):
         """Parses the configuration header out of the top of the trace file.
 
         Args:
-            trace_path: The path to the trace file to parse.t
+            trace_path: The path to the trace file to parse.
         """
         done = False
         out = []
@@ -801,10 +962,10 @@ class Trace(object):
         dd = json.loads(json_str)
         try:
             self._version = dd['geopm_version']
+            self._start_time = dd['start_time']
             self._profile_name = dd['profile_name']
-            self._power_budget = dd['power_budget']
-            self._tree_decider = dd['tree_decider']
-            self._leaf_decider = dd['leaf_decider']
+            if self._use_agent:
+                self._agent = dd['agent']
             self._node_name = dd['node_name']
         except KeyError:
             raise SyntaxError('Trace file header could not be parsed!')
@@ -815,17 +976,14 @@ class Trace(object):
     def get_version(self):
         return self._version
 
+    def get_start_time(self):
+        return self._start_time
+
     def get_profile_name(self):
         return self._profile_name
 
-    def get_tree_decider(self):
-        return self._tree_decider
-
-    def get_leaf_decider(self):
-        return self._leaf_decider
-
-    def get_power_budget(self):
-        return self._power_budget
+    def get_agent(self):
+        return self._agent
 
     def get_node_name(self):
         return self._node_name
@@ -857,14 +1015,14 @@ class Trace(object):
               'epoch' is false?
 
         """
-        epoch_rid = '9223372036854775808'
+        epoch_rid = '0x8000000000000000' if '0x' in trace_df['region_id'].iloc[0] else '9223372036854775808'
 
         if epoch:
             tmp_df = trace_df.loc[trace_df['region_id'] == epoch_rid]
         else:
             tmp_df = trace_df
 
-        filtered_df = tmp_df.filter(regex=column_regex)
+        filtered_df = tmp_df.filter(regex=column_regex).copy()
         filtered_df['elapsed_time'] = tmp_df['seconds']
         filtered_df = filtered_df.diff()
         # The following drops all 0's and the negative sample when traversing between 2 trace files.
@@ -872,9 +1030,8 @@ class Trace(object):
 
         # Reset 'index' to be 0 to the length of the unique trace files
         traces_list = []
-        for (version, name, power_budget, tree_decider, leaf_decider, node_name, iteration), df in \
-            filtered_df.groupby(level=['version', 'name', 'power_budget', 'tree_decider', 'leaf_decider',
-                                       'node_name', 'iteration']):
+        for (version, start_time, name, agent, node_name, iteration), df in \
+            filtered_df.groupby(level=['version', 'start_time', 'name', 'agent', 'node_name', 'iteration']):
             df = df.reset_index(level='index')
             df['index'] = pandas.Series(numpy.arange(len(df)), index=df.index)
             df = df.set_index('index', append=True)
@@ -903,26 +1060,25 @@ class Trace(object):
             pandas.DataFrame: Containing a single experiment iteration.
 
         """
-        diffed_trace_df = Trace.diff_df(trace_df, column_regex)
+        diffed_trace_df = Trace.diff_df(trace_df, column_regex, config.epoch_only)
 
         idx = pandas.IndexSlice
         et_sums = diffed_trace_df.groupby(level=['iteration'])['elapsed_time'].sum()
         median_index = (et_sums - et_sums.median()).abs().sort_values().index[0]
-        median_df = diffed_trace_df.loc[idx[:, :, :, :, :, :, median_index],]
+        median_df = diffed_trace_df.loc[idx[:, :, :, :, :, :, :, median_index], ]
         if config.verbose:
             median_df_index = []
             median_df_index.append(median_df.index.get_level_values('version').unique()[0])
+            median_df_index.append(median_df.index.get_level_values('start_time').unique()[0])
             median_df_index.append(median_df.index.get_level_values('name').unique()[0])
-            median_df_index.append(median_df.index.get_level_values('power_budget').unique()[0])
-            median_df_index.append(median_df.index.get_level_values('tree_decider').unique()[0])
-            median_df_index.append(median_df.index.get_level_values('leaf_decider').unique()[0])
+            median_df_index.append(median_df.index.get_level_values('agent').unique()[0])
             median_df_index.append(median_df.index.get_level_values('iteration').unique()[0])
             sys.stdout.write('Median DF index = ({})...\n'.format(' '.join(str(s) for s in median_df_index)))
             sys.stdout.flush()
         return median_df
 
 
-class AppConf(object):
+class BenchConf(object):
     """The application configuration parameters.
 
     Used to hold the config data for the integration test application.
@@ -936,7 +1092,7 @@ class AppConf(object):
     """
     def __init__(self, path):
         self._path = path
-        self._loop_count = 1;
+        self._loop_count = 1
         self._region = []
         self._big_o = []
         self._hostname = []
@@ -1000,9 +1156,9 @@ imbalance : {imbalance}
 
     def write(self):
         """Write the current config to a file."""
-        obj = {'loop-count' : self._loop_count,
-               'region' : self._region,
-               'big-o' : self._big_o}
+        obj = {'loop-count': self._loop_count,
+               'region': self._region,
+               'big-o': self._big_o}
 
         if (self._imbalance and self._hostname):
             obj['imbalance'] = self._imbalance
@@ -1012,62 +1168,46 @@ imbalance : {imbalance}
             json.dump(obj, fid)
 
 
-class CtlConf(object):
-    """The GEOPM Controller configuration parameters.
+class AgentConf(object):
+    """The GEOPM agent configuration parameters.
 
     This class contains all the parameters necessary to run the GEOPM
-    controller with a workload.
+    agent with a workload.
 
     Attributes:
         path: The output path for this configuration file.
-        mode: The type of mode for the current policy.  Set this to
-              'dynamic' in order to utilize arbitrary tree and leaf
-              deciders.
-
-        options: A dict of the options for this policy mode.  When
-                 using the 'dynamic' mode, this allows you to specify
-                 the tree and leaf deciders in addition to the power
-                 budget.
+        options: A dict of the options for this agent.
 
     """
-    def __init__(self, path, mode, options):
+    def __init__(self, path, agent='monitor', options=dict()):
+        supported_agents = {'monitor', 'power_governor', 'power_balancer', 'energy_efficient'}
         self._path = path
-        self._mode = mode
+        if agent not in supported_agents:
+            raise SyntaxError('AgentConf does not support agent type: ' + agent + '!')
+        self._agent = agent
         self._options = options
 
     def __repr__(self):
-        template = """\
-path    : {path}
-mode    : {mode}
-options : {options}
-"""
-        return template.format(path=self._path,
-                               mode=self._mode,
-                               options=self._options)
+        return json.dumps(self._options)
 
     def __str__(self):
         return self.__repr__()
 
-
-    def set_tree_decider(self, decider):
-        self._options['tree_decider'] = decider
-
-    def set_leaf_decider(self, decider):
-        self._options['leaf_decider'] = decider
-
-    def set_platform(self, platform):
-        self._options['platform'] = platform
-
-    def set_power_budget(self, budget):
-        self._options['power_budget'] = budget
-
     def get_path(self):
         return self._path
 
+    def get_agent(self):
+        return self._agent
+
     def write(self):
         """Write the current config to a file."""
-        obj = {'mode' : self._mode,
-               'options' : self._options}
-        with open(self._path, 'w') as fid:
-            json.dump(obj, fid)
-
+        with open(self._path, "w") as outfile:
+            if self._agent == 'power_governor':
+                    outfile.write("{{\"POWER\" : {}}}\n".format(str(self._options['power_budget'])))
+            elif self._agent == 'power_balancer':
+                    outfile.write("{{\"POWER_CAP\" : {}, \"STEP_COUNT\" : {}, \"MAX_EPOCH_RUNTIME\" : {}"\
+                                  ", \"POWER_SLACK\" : {}}}\n"\
+                                  .format(str(self._options['power_budget']), str(0.0), str(0.0), str(0.0)))
+            elif self._agent == 'energy_efficient':
+                    outfile.write("{{\"FREQ_MIN\" : {}, \"FREQ_MAX\" : {}}}\n"\
+                                  .format(str(self._options['frequency_min']), str(self._options['frequency_max'])))

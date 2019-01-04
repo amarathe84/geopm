@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,93 +30,155 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <string.h>
+#include <unistd.h>
+#include <limits.h>
+
 #include "geopm_signal_handler.h"
+#include "geopm_env.h"
+#include "geopm_time.h"
 #include "ControlMessage.hpp"
-#include "string.h"
+#include "Exception.hpp"
+
+#include "config.h"
 
 namespace geopm
 {
 
-    ControlMessage::ControlMessage(struct geopm_ctl_message_s *ctl_msg, bool is_ctl, bool is_writer)
-        : m_ctl_msg(ctl_msg)
+    ControlMessage::ControlMessage(struct geopm_ctl_message_s &ctl_msg, bool is_ctl, bool is_writer)
+        : M_WAIT_SEC(geopm_env_profile_timeout())
+        , m_ctl_msg(ctl_msg)
         , m_is_ctl(is_ctl)
         , m_is_writer(is_writer)
         , m_last_status(M_STATUS_UNDEFINED)
     {
-        memset(m_ctl_msg, 0, sizeof(geopm_ctl_message_s));
-    }
-
-    ControlMessage::~ControlMessage()
-    {
-
-    }
-
-    void ControlMessage::step()
-    {
-        if (m_is_ctl && m_ctl_msg->ctl_status != M_STATUS_SHUTDOWN) {
-            m_ctl_msg->ctl_status++;
+        if (!is_ctl && is_writer) {
+            memset(&m_ctl_msg, 0, sizeof(geopm_ctl_message_s));
         }
-        else if (m_is_writer && m_ctl_msg->app_status != M_STATUS_SHUTDOWN) {
-            m_ctl_msg->app_status++;
+        else {
+            bool is_init = false;
+            geopm_time_s start;
+            geopm_time(&start);
+            do {
+                geopm_signal_handler_check();
+                if (this_status() == M_STATUS_ABORT) {
+                    throw Exception("ControlMessage::wait(): Abort sent through control message",
+                                    GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
+                }
+                is_init = (m_ctl_msg.app_status == 0 ||
+                           m_ctl_msg.app_status == M_STATUS_MAP_BEGIN);
+            } while (!is_init && geopm_time_since(&start) < M_WAIT_SEC);
+            if (!is_init) {
+                char hostname[NAME_MAX];
+                int err = gethostname(hostname, NAME_MAX);
+                std::string hostname_str = "";
+                if (!err) {
+                    hostname_str = std::string(hostname);
+                }
+                throw Exception("ControlMessage::wait(): " + hostname_str +
+                                " : is_ctl=" + std::to_string(m_is_ctl) +
+                                " : is_writer=" + std::to_string(m_is_writer) +
+                                " : Timed out waiting for startup",
+                                GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
+            }
         }
     }
 
-    void ControlMessage::wait()
+    void ControlMessage::step(void)
+    {
+        if (m_is_ctl && m_ctl_msg.ctl_status != M_STATUS_SHUTDOWN) {
+            m_ctl_msg.ctl_status++;
+        }
+        else if (m_is_writer && m_ctl_msg.app_status != M_STATUS_SHUTDOWN) {
+            m_ctl_msg.app_status++;
+        }
+    }
+
+    void ControlMessage::wait(void)
     {
         if (m_last_status != M_STATUS_SHUTDOWN) {
             ++m_last_status;
         }
-        while (this_status() != m_last_status) {
+        geopm_time_s start;
+        geopm_time(&start);
+        while (this_status() != m_last_status && geopm_time_since(&start) < M_WAIT_SEC) {
             geopm_signal_handler_check();
+            if (this_status() == M_STATUS_ABORT) {
+                throw Exception("ControlMessage::wait(): Abort sent through control message",
+                                GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
+            }
+        }
+        if (this_status() != m_last_status) {
+            char hostname[NAME_MAX];
+            int err = gethostname(hostname, NAME_MAX);
+            std::string hostname_str = "";
+            if (!err) {
+                hostname_str = std::string(hostname);
+            }
+            throw Exception("ControlMessage::wait(): " + hostname_str +
+                            " : is_ctl=" + std::to_string(m_is_ctl) +
+                            " : is_writer=" + std::to_string(m_is_writer) +
+                            " : Timed out waiting for status " + std::to_string(m_last_status),
+                            GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
+        }
+    }
+
+    void ControlMessage::abort(void)
+    {
+        if (m_is_ctl) {
+            m_ctl_msg.ctl_status = M_STATUS_ABORT;
+        }
+        else {
+            m_ctl_msg.app_status = M_STATUS_ABORT;
         }
     }
 
     void ControlMessage::cpu_rank(int cpu_idx, int rank)
     {
-        m_ctl_msg->cpu_rank[cpu_idx] = rank;
+        m_ctl_msg.cpu_rank[cpu_idx] = rank;
     }
 
-    int ControlMessage::cpu_rank(int cpu_idx)
+    int ControlMessage::cpu_rank(int cpu_idx) const
     {
-        return m_ctl_msg->cpu_rank[cpu_idx];
+        return m_ctl_msg.cpu_rank[cpu_idx];
     }
 
-    bool ControlMessage::is_sample_begin(void)
+    bool ControlMessage::is_sample_begin(void) const
     {
-        return (m_ctl_msg->app_status == M_STATUS_SAMPLE_BEGIN);
+        return (m_ctl_msg.app_status == M_STATUS_SAMPLE_BEGIN);
     }
 
-    bool ControlMessage::is_sample_end(void)
+    bool ControlMessage::is_sample_end(void) const
     {
-        return (m_ctl_msg->app_status == M_STATUS_SAMPLE_END);
+        return (m_ctl_msg.app_status == M_STATUS_SAMPLE_END);
     }
 
-    bool ControlMessage::is_name_begin(void)
+    bool ControlMessage::is_name_begin(void) const
     {
-        return (m_ctl_msg->app_status == M_STATUS_NAME_BEGIN);
+        return (m_ctl_msg.app_status == M_STATUS_NAME_BEGIN);
     }
 
-    bool ControlMessage::is_shutdown(void)
+    bool ControlMessage::is_shutdown(void) const
     {
-        return (m_ctl_msg->app_status == M_STATUS_SHUTDOWN);
+        return (m_ctl_msg.app_status == M_STATUS_SHUTDOWN);
     }
 
-    int ControlMessage::this_status()
+    int ControlMessage::this_status() const
     {
-        return (m_is_ctl ? m_ctl_msg->app_status : m_ctl_msg->ctl_status);
+        return (m_is_ctl ? m_ctl_msg.app_status : m_ctl_msg.ctl_status);
     }
 
     void ControlMessage::loop_begin()
     {
         if (m_is_ctl) {
-            while (m_ctl_msg->app_status != M_STATUS_NAME_LOOP_BEGIN) {
+            while (m_ctl_msg.app_status != M_STATUS_NAME_LOOP_BEGIN) {
                 geopm_signal_handler_check();
             }
-            m_ctl_msg->ctl_status = M_STATUS_NAME_LOOP_BEGIN;
+            m_ctl_msg.ctl_status = M_STATUS_NAME_LOOP_BEGIN;
         }
         else {
-            m_ctl_msg->app_status = M_STATUS_NAME_LOOP_BEGIN;
-            while (m_ctl_msg->ctl_status != M_STATUS_NAME_LOOP_BEGIN) {
+            m_ctl_msg.app_status = M_STATUS_NAME_LOOP_BEGIN;
+            while (m_ctl_msg.ctl_status != M_STATUS_NAME_LOOP_BEGIN) {
                 geopm_signal_handler_check();
             }
         }

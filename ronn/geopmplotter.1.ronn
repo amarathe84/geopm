@@ -1,7 +1,7 @@
-geopmplotter(1) -- geopm plotting application
-==============================================
+geopmplotter(1) -- visualize reports and traces
+===============================================
 
-[//]: # (Copyright (c) 2015, 2016, 2017, Intel Corporation)
+[//]: # (Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation)
 [//]: # ()
 [//]: # (Redistribution and use in source and binary forms, with or without)
 [//]: # (modification, are permitted provided that the following conditions)
@@ -53,11 +53,13 @@ If _PATH_ is not provided, the current working directory is used.
 * `-t`, `--trace_base` _TRACE_BASE_:
   The base trace string to be searched. All files that are located in the _PATH_ directory
   that begin with _TRACE_BASE_ will be selected and interpreted as trace files.  If this option
-  is not specified then all files with the ".trace" extension in _PATH_ are selected.
+  is not specified then all files with the ".trace" extension in _PATH_ are selected.  If 'None'
+  is specified as the trace base then no trace files will be parsed.
 
-* `-p`, `--plot_type` _bar_|_box_|_power_|_epoch_|_freq_:
+* `-p`, `--plot_type` _bar_|_box_|_power_|_epoch_|_freq_|_debug_:
   The type of plot to be generated (default: _bar_).  Multiple plots can
-  be specified by providing a comma separated list (e.g. -p bar,box).
+  be specified by providing a comma separated list (e.g. -p bar,box).  The debug plot can be
+  used to explore parsed data from a Python command prompt.
 
 * `-s`, `--shell`:
   Drop to a python shell after plotting.  Useful for data analysis.
@@ -173,6 +175,10 @@ If _PATH_ is not provided, the current working directory is used.
   described here:<br>
   _https://matplotlib.org/faq/usage_faq.html#what-is-a-backend_.
 
+  The plotter will try to use the default backend (TkAgg), and fall back to Agg automatically
+  if the default is not supported.  Additional backends can be used by setting MPLBACKEND
+  in the environment.
+
 Using either of these options will prevent `--show` from working properly.
 
 ## EXAMPLES
@@ -232,19 +238,10 @@ Using either of these options will prevent `--show` from working properly.
     geopmplotter -vp power --cache all --analyze
 
 ## COPYRIGHT
-Copyright (C) 2015, 2016, 2017, Intel Corporation. All rights reserved.
+Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation. All rights reserved.
 
 ## SEE ALSO
 **geopm(7)**,
 **geopmpy(7)**,
-**geopm_ctl_c(3)**,
-**geopm_error(3)**,
-**geopm_fortran(3)**,
-**geopm_sched(3)**,
-**geopm_policy_c(3)**,
-**geopm_prof_c(3)**,
-**geopm_version(3)**,
-**geopmsrun(1)**,
-**geopmaprun(1)**,
-**geopmctl(1)**,
-**geopmpolicy(1)**
+**geopmanalysis(1)**,
+**geopmlaunch(1)**,

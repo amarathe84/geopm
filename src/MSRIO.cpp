@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -49,7 +49,13 @@
 namespace geopm
 {
     MSRIO::MSRIO()
-        : m_num_cpu(geopm_sched_num_cpu())
+        : MSRIO(geopm_sched_num_cpu())
+    {
+
+    }
+
+    MSRIO::MSRIO(int num_cpu)
+        : m_num_cpu(num_cpu)
         , m_file_desc(m_num_cpu + 1, -1) // Last file descriptor is for the batch file
         , m_is_batch_enabled(true)
         , m_read_batch({0, NULL})
@@ -90,7 +96,7 @@ namespace geopm
         if ((raw_value & write_mask) != raw_value) {
             std::ostringstream err_str;
             err_str << "MSRIO::write_msr(): raw_value does not obey write_mask, "
-                       "raw_value=0x" << std::hex << raw_value
+                    << "raw_value=0x" << std::hex << raw_value
                     << " write_mask=0x" << write_mask;
             throw Exception(err_str.str(), GEOPM_ERROR_INVALID, __FILE__, __LINE__);
         }
@@ -100,7 +106,7 @@ namespace geopm
         size_t num_write = pwrite(msr_desc(cpu_idx), &write_value, sizeof(write_value), offset);
         if (num_write != sizeof(write_value)) {
             std::ostringstream err_str;
-            err_str << "MSRIO::read_msr(): pwrite() failed at offset 0x" << std::hex << offset
+            err_str << "MSRIO::write_msr(): pwrite() failed at offset 0x" << std::hex << offset
                     << " system error: " << strerror(errno);
             throw Exception(err_str.str(), GEOPM_ERROR_MSR_WRITE, __FILE__, __LINE__);
         }
@@ -131,7 +137,7 @@ namespace geopm
                 batch_it->msr = *offset_it;
                 batch_it->msrdata = 0;
                 batch_it->wmask = 0;
-             }
+            }
         }
         m_read_batch.numops = m_read_batch_op.size();
         m_read_batch.ops = m_read_batch_op.data();
@@ -161,10 +167,9 @@ namespace geopm
         struct m_msr_batch_array_s *batch_ptr = is_read ? &m_read_batch : &m_write_batch;
         int err = ioctl(msr_batch_desc(), GEOPM_IOC_MSR_BATCH, batch_ptr);
         if (err) {
-            std::ostringstream err_str;
-            err_str << "MSRIO::read_ioctl(): call to ioctl() for /dev/cpu/msr_batch failed: "
-                    << " system error: " << strerror(errno);
-            throw Exception(err_str.str(), GEOPM_ERROR_MSR_READ, __FILE__, __LINE__);
+            throw Exception("MSRIO::msr_ioctl(): call to ioctl() for /dev/cpu/msr_batch failed: " +
+                            std::string(" system error: ") + strerror(errno),
+                            GEOPM_ERROR_MSR_READ, __FILE__, __LINE__);
         }
         for (uint32_t batch_idx = 0; batch_idx != m_write_batch.numops; ++batch_idx) {
             if (m_write_batch.ops[batch_idx].err) {
@@ -210,6 +215,7 @@ namespace geopm
                             GEOPM_ERROR_INVALID, __FILE__, __LINE__);
         }
         open_msr_batch();
+#ifdef GEOPM_ENABLE_MSRSAFE_IOCTL_WRITE
         if (m_is_batch_enabled) {
             uint32_t batch_idx = 0;
             for (auto raw_it = raw_value.begin();
@@ -219,7 +225,9 @@ namespace geopm
             }
             msr_ioctl(false);
         }
-        else {
+        else
+#endif
+        {
             uint32_t batch_idx = 0;
             for (auto raw_it = raw_value.begin();
                  batch_idx != m_write_batch.numops;
@@ -235,10 +243,9 @@ namespace geopm
     int MSRIO::msr_desc(int cpu_idx)
     {
         if (cpu_idx < 0 || cpu_idx > m_num_cpu) {
-            std::ostringstream err_str;
-            err_str << "MSRIO: cpu_idx=" << cpu_idx
-                    << " out of range, num_cpu=" << m_num_cpu;
-            throw Exception(err_str.str(),GEOPM_ERROR_INVALID, __FILE__, __LINE__);
+            throw Exception("MSRIO::msr_desc(): cpu_idx=" + std::to_string(cpu_idx) +
+                            " out of range, num_cpu=" + std::to_string(m_num_cpu),
+                            GEOPM_ERROR_INVALID, __FILE__, __LINE__);
         }
         open_msr(cpu_idx);
         return m_file_desc[cpu_idx];
@@ -280,17 +287,16 @@ namespace geopm
                 msr_path(cpu_idx, true, path);
                 m_file_desc[cpu_idx] = open(path.c_str(), O_RDWR);
                 if (m_file_desc[cpu_idx] == -1) {
-                    std::ostringstream err_str;
-                    err_str << "MSRIO::open_msr(): Failed to open \"" << path << "\": "
-                            << "system error: " << strerror(errno);
-                    throw Exception(err_str.str(), GEOPM_ERROR_MSR_OPEN, __FILE__, __LINE__);
+                    throw Exception("MSRIO::open_msr(): Failed to open \"" + path + "\": " +
+                                    "system error: " + strerror(errno),
+                                    GEOPM_ERROR_MSR_OPEN, __FILE__, __LINE__);
                 }
             }
         }
         struct stat stat_buffer;
         int err = fstat(m_file_desc[cpu_idx], &stat_buffer);
         if (err) {
-            throw Exception("MSRIO::open_msr(): file descritor invalid",
+            throw Exception("MSRIO::open_msr(): file descriptor invalid",
                             GEOPM_ERROR_MSR_OPEN, __FILE__, __LINE__);
         }
     }
@@ -309,7 +315,7 @@ namespace geopm
             struct stat stat_buffer;
             int err = fstat(m_file_desc[m_num_cpu], &stat_buffer);
             if (err) {
-                throw Exception("MSRIO::open_msr_batch(): file descritor invalid",
+                throw Exception("MSRIO::open_msr_batch(): file descriptor invalid",
                                 GEOPM_ERROR_MSR_OPEN, __FILE__, __LINE__);
             }
         }

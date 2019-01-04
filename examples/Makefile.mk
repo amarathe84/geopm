@@ -1,4 +1,4 @@
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -30,22 +30,23 @@
 #
 
 EXTRA_DIST += examples/README.md \
-              examples/example_policy.json \
-              examples/amg2013/0001-Adding-geopm-markup-to-AMG.patch \
-              examples/amg2013/README \
+              examples/amg/0001-Adding-geopm-markup-to-AMG.patch \
+              examples/amg/0001-Adding-geopm-markup-to-CORAL-2-AMG.patch \
+              examples/amg/README \
               examples/comd/0001-Marked-up-CoMD-code-for-use-with-GEOPM.patch \
               examples/comd/README \
+              examples/hacc/README \
+              examples/minife/0001-Adding-geopm-markup-to-CORAL-version-of-miniFE.patch \
               examples/minife/0001-Optimized-MiniFE-code-for-Intel-hardware.patch \
               examples/minife/0002-Marked-up-MiniFE-code-for-use-with-GEOPM.patch \
-              examples/minife/0001-Adding-geopm-markup-to-CORAL-version-of-miniFE.patch \
               examples/minife/README \
               examples/nekbone/0001-Optimized-nekbone-code-for-Intel-hardware.patch \
               examples/nekbone/0002-Marked-up-nekbone-code-for-use-with-GEOPM.patch \
+              examples/nekbone/0003-Increase-problem-size-for-Theta.patch \
               examples/nekbone/README \
-              examples/qbox/README \
               examples/qbox/0001-Adding-geopm-markup-for-qbox.patch \
               examples/qbox/0002-Fixing-run-scripts-and-adding-run-scipt-for-qbox.patch \
-              examples/hacc/README \
+              examples/qbox/README \
               #end
 
 noinst_PROGRAMS += examples/geopm_print_error
@@ -71,8 +72,8 @@ endif
 
 if ENABLE_MPI
 if ENABLE_SCHED
-    noinst_PROGRAMS += examples/synthetic_benchmark \
-                       examples/print_affinity \
+    noinst_PROGRAMS += examples/print_affinity \
+                       examples/synthetic_benchmark \
                        # end
     examples_synthetic_benchmark_SOURCES = examples/synthetic_benchmark.cpp examples/synthetic_benchmark.hpp
     examples_synthetic_benchmark_LDADD = libgeopm.la $(MPI_CXXLIBS)
@@ -85,9 +86,7 @@ endif
 if ENABLE_MPI
 if ENABLE_OPENMP
 if ENABLE_SCHED
-    noinst_PROGRAMS += examples/threaded_step \
-                       examples/simple_prof_c \
-                       #end
+    noinst_PROGRAMS += examples/simple_prof_c
     examples_simple_prof_c_SOURCES = examples/simple_prof_c.c
     examples_simple_prof_c_LDADD = libgeopm.la $(MPI_CXXLIBS)
     examples_simple_prof_c_CPPFLAGS = $(AM_CPPFLAGS) $(MPI_CPPFLAGS) $(OPENMP_CFLAGS)
@@ -107,11 +106,6 @@ if ENABLE_FORTRAN
     examples_simple_prof_f_LDFLAGS = $(AM_LDFLAGS) $(MPI_LDFLAGS) $(OPENMP_CFLAGS)
     examples_simple_prof_f_FCFLAGS = $(AM_FCFLAGS) $(MPI_FCFLAGS) $(OPENMP_CFLAGS)
 endif
-    examples_threaded_step_SOURCES = examples/threaded_step_example.c
-    examples_threaded_step_CPPFLAGS = $(AM_CPPFLAGS) $(MPI_CPPFLAGS) $(OPENMP_CFLAGS)
-    examples_threaded_step_LDADD = libgeopm.la $(MPI_CXXLIBS)
-    examples_threaded_step_LDFLAGS = $(AM_LDFLAGS) $(MPI_CXXLDFLAGS) $(OPENMP_CFLAGS)
-    examples_threaded_step_CFLAGS = $(AM_CFLAGS) $(MPI_CFLAGS) $(OPENMP_CFLAGS)
 endif
 endif
 endif

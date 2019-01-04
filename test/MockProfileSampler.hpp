@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,33 +30,46 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifndef MOCKPROFILESAMPLER_HPP_INCLUDE
+#define MOCKPROFILESAMPLER_HPP_INCLUDE
+
 #include "Comm.hpp"
-#include "geopm_message.h"
 #include "ProfileThread.hpp"
 #include "ProfileSampler.hpp"
 
-class MockProfileSampler : public geopm::IProfileSampler {
+class MockProfileSampler : public geopm::IProfileSampler
+{
     public:
-        MOCK_METHOD0(capacity,
-            size_t (void));
+        MOCK_CONST_METHOD0(capacity,
+                     size_t (void));
         MOCK_METHOD3(sample,
-            void (std::vector<std::pair<uint64_t, struct geopm_prof_message_s> > &content, size_t &length, geopm::IComm *comm));
-        MOCK_METHOD0(do_shutdown,
-            bool (void));
-        MOCK_METHOD0(do_report,
-            bool (void));
+                     void (std::vector<std::pair<uint64_t, struct geopm_prof_message_s> > &content,
+                           size_t &length,
+                           std::shared_ptr<geopm::Comm> comm));
+        MOCK_CONST_METHOD0(do_shutdown,
+                     bool (void));
+        MOCK_CONST_METHOD0(do_report,
+                           bool (void));
         MOCK_METHOD0(region_names,
-            void (void));
-        MOCK_METHOD1(initialize,
-            void (int &rank_per_node));
-        MOCK_METHOD1(cpu_rank,
-            void (std::vector<int> &cpu_rank));
-        MOCK_METHOD1(name_set,
-            void (std::set<std::string> &region_name));
-        MOCK_METHOD1(report_name,
-            void (std::string &report_str));
-        MOCK_METHOD1(profile_name,
-            void (std::string &prof_str));
-        MOCK_METHOD0(tprof_table,
-            geopm::IProfileThreadTable *(void));
+                     void (void));
+        MOCK_METHOD0(initialize,
+                     void (void));
+        MOCK_CONST_METHOD0(rank_per_node,
+                           int (void));
+        MOCK_CONST_METHOD0(cpu_rank,
+                           std::vector<int> (void));
+        MOCK_CONST_METHOD0(name_set,
+                           std::set<std::string> (void));
+        MOCK_CONST_METHOD0(report_name,
+                           std::string (void));
+        MOCK_CONST_METHOD0(profile_name,
+                           std::string (void));
+        MOCK_CONST_METHOD0(tprof_table,
+                           std::shared_ptr<geopm::IProfileThreadTable>(void));
+        MOCK_METHOD0(controller_ready,
+                     void(void));
+        MOCK_METHOD0(abort,
+                     void(void));
 };
+
+#endif

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -44,38 +44,40 @@ export LD_LIBRARY_PATH=$GEOPM_LIBDIR:$LD_LIBRARY_PATH
 # launch geopm controller as an MPI process
 # create a report file
 # create trace files
-if [ "$GEOPM_RM" == "SLURM" ]; then
+if [ "$GEOPM_LAUNCHER" == "srun" ]; then
     # Use GEOPM launcher wrapper script with SLURM's srun
-    geopmsrun  -N 2 \
-               -n 8 \
-               --geopm-preload \
-               --geopm-ctl=process \
-               --geopm-report=tutorial_1_report \
-               --geopm-trace=tutorial_1_trace \
-               -- ./tutorial_1
+    geopmlaunch srun \
+                -N 2 \
+                -n 8 \
+                --geopm-preload \
+                --geopm-ctl=process \
+                --geopm-report=tutorial_1_report \
+                --geopm-trace=tutorial_1_trace \
+                -- ./tutorial_1
     err=$?
-elif [ "$GEOPM_RM" == "ALPS" ]; then
+elif [ "$GEOPM_LAUNCHER" == "aprun" ]; then
     # Use GEOPM launcher wrapper script with ALPS's aprun
-    geopmaprun -N 4 \
-               -n 8 \
-               --geopm-preload \
-               --geopm-ctl=process \
-               --geopm-report=tutorial_1_report \
-               --geopm-trace=tutorial_1_trace \
-               -- ./tutorial_1
+    geopmlaunch aprun \
+                -N 4 \
+                -n 8 \
+                --geopm-preload \
+                --geopm-ctl=process \
+                --geopm-report=tutorial_1_report \
+                --geopm-trace=tutorial_1_trace \
+                -- ./tutorial_1
     err=$?
 elif [ $MPIEXEC ]; then
     # Use MPIEXEC and set GEOPM environment variables to launch the job
     LD_PRELOAD=$GEOPM_LIBDIR/libgeopm.so \
     LD_DYNAMIC_WEAK=true \
-    GEOPM_PMPI_CTL=process \
+    GEOPM_CTL=process \
     GEOPM_REPORT=tutorial_1_report \
     GEOPM_TRACE=tutorial_1_trace \
     $MPIEXEC \
     ./tutorial_1
     err=$?
 else
-    echo "Error: tutorial_1.sh: set GEOPM_RM to 'SLURM' or 'ALPS'." 2>&1
+    echo "Error: tutorial_1.sh: set GEOPM_LAUNCHER to 'srun' or 'aprun'." 2>&1
     echo "       If SLURM or ALPS are not available, set MPIEXEC to" 2>&1
     echo "       a command that will launch an MPI job on your system" 2>&1
     echo "       using 2 nodes and 10 processes." 2>&1

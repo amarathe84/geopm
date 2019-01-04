@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,6 +29,11 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY LOG OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
+#ifndef GEOPM_SCHED_H_INCLUDE
+#define GEOPM_SCHED_H_INCLUDE
+
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -77,6 +82,10 @@ int geopm_sched_proc_cpuset(int num_cpu, cpu_set_t *proc_cpuset);
 
 int geopm_sched_woomp(int num_cpu, cpu_set_t *woomp);
 
+int geopm_sched_popen(const char *cmd, FILE **fid);
+
 #ifdef __cplusplus
 }
+#endif
+
 #endif

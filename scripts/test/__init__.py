@@ -1,5 +1,5 @@
 #
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -30,5 +30,4 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-__all__ = ['geopm_context', 'TestAffinity']
-
+__all__ = ['geopm_context', 'TestAffinity', 'TestAnalysis', 'TestSubsetOptionParser']

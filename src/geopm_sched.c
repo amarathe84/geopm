@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -47,6 +47,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include <string.h>
+#include <signal.h>
 
 #include "geopm_sched.h"
 #include "geopm_error.h"
@@ -56,11 +57,46 @@
 #include <omp.h>
 #endif
 
+static volatile unsigned g_is_popen_complete = 0;
+static struct sigaction g_popen_complete_signal_action;
+
+static void geopm_sched_popen_complete(int signum)
+{
+    if (signum == SIGCHLD) {
+        g_is_popen_complete = 1;
+    }
+}
+
+int geopm_sched_popen(const char *cmd, FILE **fid)
+{
+    int err = 0;
+    *fid = NULL;
+
+    struct sigaction save_action;
+    g_popen_complete_signal_action.sa_handler = geopm_sched_popen_complete;
+    sigemptyset(&g_popen_complete_signal_action.sa_mask);
+    g_popen_complete_signal_action.sa_flags = 0;
+    err = sigaction(SIGCHLD, &g_popen_complete_signal_action, &save_action);
+    if (!err) {
+        *fid = popen(cmd, "r");
+        while (*fid && !g_is_popen_complete) {
+
+        }
+        g_is_popen_complete = 0;
+        sigaction(SIGCHLD, &save_action, NULL);
+    }
+    if (!err && *fid == NULL) {
+        err = errno ? errno : GEOPM_ERROR_RUNTIME;
+    }
+    return err;
+}
+
+
 #ifndef __APPLE__
 
 int geopm_sched_num_cpu(void)
 {
-    return sysconf(_SC_NPROCESSORS_ONLN);
+    return sysconf(_SC_NPROCESSORS_CONF);
 }
 
 int geopm_sched_get_cpu(void)
@@ -70,6 +106,7 @@ int geopm_sched_get_cpu(void)
 
 static pthread_once_t g_proc_cpuset_once = PTHREAD_ONCE_INIT;
 static cpu_set_t *g_proc_cpuset = NULL;
+static size_t g_proc_cpuset_size = 0;
 
 /* If /proc/self/status is usable and correct then parse this file to
    determine the process affinity. */
@@ -94,8 +131,8 @@ int geopm_sched_proc_cpuset_helper(int num_cpu, uint32_t *proc_cpuset, FILE *fid
             int num_comma = 0;
             char *comma_ptr = line_ptr;
             while ((comma_ptr = strchr(comma_ptr, ','))) {
-               ++comma_ptr;
-               ++num_comma;
+                ++comma_ptr;
+                ++num_comma;
             }
             if (num_comma > num_read - 1) {
                 num_comma -= num_read - 1;
@@ -149,11 +186,13 @@ static void geopm_proc_cpuset_once(void)
     if (g_proc_cpuset == NULL) {
         err = ENOMEM;
     }
-    proc_cpuset = calloc(num_read, sizeof(uint32_t));
-    if (proc_cpuset == NULL) {
-        err = ENOMEM;
+    if (!err) {
+        g_proc_cpuset_size = CPU_ALLOC_SIZE(num_cpu);
+        proc_cpuset = calloc(num_read, sizeof(*proc_cpuset));
+        if (proc_cpuset == NULL) {
+            err = ENOMEM;
+        }
     }
-
     if (!err) {
         fid = fopen(status_path, "r");
         if (!fid) {
@@ -165,11 +204,11 @@ static void geopm_proc_cpuset_once(void)
         fclose(fid);
     }
     if (!err) {
-        memcpy(g_proc_cpuset, proc_cpuset, CPU_ALLOC_SIZE(num_cpu));
+        memcpy(g_proc_cpuset, proc_cpuset, g_proc_cpuset_size);
     }
     else if (g_proc_cpuset) {
         for (int i = 0; i < num_cpu; ++i) {
-            CPU_SET(i, g_proc_cpuset);
+            CPU_SET_S(i, g_proc_cpuset_size, g_proc_cpuset);
         }
     }
     if (proc_cpuset) {
@@ -185,7 +224,7 @@ static void geopm_proc_cpuset_once(void)
 static void *geopm_proc_cpuset_pthread(void *arg)
 {
     void *result = NULL;
-    int err = sched_getaffinity(0, CPU_ALLOC_SIZE(geopm_sched_num_cpu()), g_proc_cpuset);
+    int err = sched_getaffinity(0, g_proc_cpuset_size, g_proc_cpuset);
     if (err) {
         result = (void *)(size_t)(errno ? errno : GEOPM_ERROR_RUNTIME);
     }
@@ -204,15 +243,14 @@ static void geopm_proc_cpuset_once(void)
         err = ENOMEM;
     }
     if (!err) {
+        g_proc_cpuset_size = CPU_ALLOC_SIZE(num_cpu);
         for (int i = 0; i < num_cpu; ++i) {
-            CPU_SET(i, g_proc_cpuset);
+            CPU_SET_S(i, g_proc_cpuset_size, g_proc_cpuset);
         }
-    }
-    if (!err) {
         err = pthread_attr_init(&attr);
     }
     if (!err) {
-        err = pthread_attr_setaffinity_np(&attr, CPU_ALLOC_SIZE(num_cpu), g_proc_cpuset);
+        err = pthread_attr_setaffinity_np(&attr, g_proc_cpuset_size, g_proc_cpuset);
     }
     if (!err) {
         err = pthread_create(&tid, &attr, geopm_proc_cpuset_pthread, NULL);
@@ -224,10 +262,9 @@ static void geopm_proc_cpuset_once(void)
             err = (int)(size_t)result;
         }
     }
-    if (err && err != ENOMEM)
-    {
+    if (err && err != ENOMEM) {
         for (int i = 0; i < num_cpu; ++i) {
-            CPU_SET(i, g_proc_cpuset);
+            CPU_SET_S(i, g_proc_cpuset_size, g_proc_cpuset);
         }
     }
     if (!err) {
@@ -241,13 +278,14 @@ int geopm_sched_proc_cpuset(int num_cpu, cpu_set_t *proc_cpuset)
 {
     int err = pthread_once(&g_proc_cpuset_once, geopm_proc_cpuset_once);
     int sched_num_cpu = geopm_sched_num_cpu();
-    if (!err && sched_num_cpu > num_cpu) {
+    size_t cpuset_size = CPU_ALLOC_SIZE(num_cpu);
+    if (!err && cpuset_size < g_proc_cpuset_size) {
         err = GEOPM_ERROR_INVALID;
     }
     if (!err) {
-        memcpy(proc_cpuset, g_proc_cpuset, CPU_ALLOC_SIZE(sched_num_cpu));
+        memcpy(proc_cpuset, g_proc_cpuset, g_proc_cpuset_size);
         for (int i = sched_num_cpu; i < num_cpu; ++i) {
-            CPU_CLR(i, proc_cpuset);
+            CPU_CLR_S(i, cpuset_size, proc_cpuset);
         }
     }
     return err;
@@ -255,23 +293,36 @@ int geopm_sched_proc_cpuset(int num_cpu, cpu_set_t *proc_cpuset)
 
 int geopm_sched_woomp(int num_cpu, cpu_set_t *woomp)
 {
+    /*! @brief Function that returns a cpuset that has bits set for
+               all CPUs enabled for the process which are not used by
+               OpenMP.  Rather than returning an empty mask, if all
+               CPUs allocated for the process are used by OpenMP, then
+               the woomp mask will have all bits set. */
+
     int err = pthread_once(&g_proc_cpuset_once, geopm_proc_cpuset_once);
-    if (!g_proc_cpuset) {
+    int sched_num_cpu = geopm_sched_num_cpu();
+    size_t req_alloc_size = CPU_ALLOC_SIZE(num_cpu);
+
+    if (!err && !g_proc_cpuset) {
         err = ENOMEM;
     }
-    if (!err) {
-        memcpy(woomp, g_proc_cpuset, CPU_ALLOC_SIZE(num_cpu));
+    if (!err && req_alloc_size < g_proc_cpuset_size) {
+        err = EINVAL;
     }
     if (!err) {
+        /* Copy the process CPU mask into the output. */
+        memcpy(woomp, g_proc_cpuset, g_proc_cpuset_size);
+        /* Start an OpenMP parallel region and have each thread clear
+           its bit from the mask. */
 #ifdef _OPENMP
 #pragma omp parallel default(shared)
 {
 #pragma omp critical
 {
         int cpu_index = sched_getcpu();
-        if (cpu_index != -1 && cpu_index < num_cpu)
-        {
-            CPU_CLR(cpu_index, woomp);
+        if (cpu_index != -1 && cpu_index < num_cpu) {
+            /* Clear the bit for this OpenMP thread's CPU. */
+            CPU_CLR_S(cpu_index, g_proc_cpuset_size, woomp);
         }
         else {
             err = errno ? errno : GEOPM_ERROR_LOGIC;
@@ -280,11 +331,16 @@ int geopm_sched_woomp(int num_cpu, cpu_set_t *woomp)
 } /* end pragma omp parallel */
 #endif /* _OPENMP */
     }
-    if (err || CPU_COUNT(woomp) == 0) {
+    if (!err) {
+        for (int i = sched_num_cpu; i < num_cpu; ++i) {
+            CPU_CLR_S(i, req_alloc_size, woomp);
+        }
+    }
+    if (err || CPU_COUNT_S(g_proc_cpuset_size, woomp) == 0) {
         /* If all CPUs are used by the OpenMP gang, then leave the
            mask open and allow the Linux scheduler to choose. */
         for (int i = 0; i < num_cpu; ++i) {
-            CPU_SET(i, woomp);
+            CPU_SET_S(i, g_proc_cpuset_size, woomp);
         }
     }
     return err;
@@ -319,8 +375,9 @@ int geopm_sched_get_cpu(void)
 // mask and woomp to get the tests passing.
 static void geopm_cpuset_fill(int num_cpu, cpu_set_t *proc_cpuset)
 {
+    size_t cpuset_size = CPU_ALLOC_SIZE(num_cpu);
     for (int i = 0; i < num_cpu; ++i) {
-        CPU_SET(i, woomp);
+        CPU_SET_S(i, cpuset_size, proc_cpuset);
     }
 }
 int geopm_sched_proc_cpuset(int num_cpu, cpu_set_t *proc_cpuset)

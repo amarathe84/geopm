@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,24 +37,20 @@ extern "C"
 {
 #endif
 
-enum geopm_pmpi_ctl_e {
-    GEOPM_PMPI_CTL_NONE,
-    GEOPM_PMPI_CTL_PROCESS,
-    GEOPM_PMPI_CTL_PTHREAD,
-};
-
 const char *geopm_env_policy(void);
+const char *geopm_env_agent(void);
 const char *geopm_env_shmkey(void);
 const char *geopm_env_trace(void);
 const char *geopm_env_plugin_path(void);
 const char *geopm_env_report(void);
 const char *geopm_env_comm(void);
 const char *geopm_env_profile(void);
-int geopm_env_report_verbosity(void);
+const char *geopm_env_trace_signal(int);
+int geopm_env_num_trace_signal(void);
+int geopm_env_max_fan_out(void);
 int geopm_env_pmpi_ctl(void);
 int geopm_env_do_region_barrier(void);
 int geopm_env_do_trace(void);
-int geopm_env_do_ignore_affinity(void);
 int geopm_env_do_profile(void);
 int geopm_env_profile_timeout(void);
 int geopm_env_debug_attach(void);

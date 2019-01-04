@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,9 +33,8 @@
 #ifndef GEOPM_H_INCLUDE
 #define GEOPM_H_INCLUDE
 
+#include <stddef.h>
 #include <stdint.h>
-
-#include "geopm_policy.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -53,6 +52,14 @@ enum geopm_region_hint_e {
     GEOPM_REGION_HINT_SERIAL =    1ULL << 37, // Single threaded region
     GEOPM_REGION_HINT_PARALLEL =  1ULL << 38, // Region is threaded
     GEOPM_REGION_HINT_IGNORE =    1ULL << 39, // Do not add region time to epoch
+    GEOPM_MASK_REGION_HINT =      GEOPM_REGION_HINT_UNKNOWN |
+                                  GEOPM_REGION_HINT_COMPUTE |
+                                  GEOPM_REGION_HINT_MEMORY |
+                                  GEOPM_REGION_HINT_NETWORK |
+                                  GEOPM_REGION_HINT_IO |
+                                  GEOPM_REGION_HINT_SERIAL |
+                                  GEOPM_REGION_HINT_PARALLEL |
+                                  GEOPM_REGION_HINT_IGNORE,
 };
 
 /*************************/
@@ -83,7 +90,6 @@ int geopm_tprof_init_loop(int num_thread,
                           size_t chunk_size);
 
 int geopm_tprof_post(void);
-
 
 #ifdef __cplusplus
 }

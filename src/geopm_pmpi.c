@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,33 +34,41 @@
 #endif
 #include <stdlib.h>
 #include <string.h>
-#include <mpi.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <errno.h>
+#include <limits.h>
 
-#include "geopm.h"
+#ifndef GEOPM_TEST
+#include <mpi.h>
 #include "geopm_ctl.h"
-#include "geopm_error.h"
-#include "geopm_message.h"
+#endif
+#include "geopm.h"
 #include "geopm_env.h"
+#include "geopm_error.h"
+#include "geopm_internal.h"
 #include "geopm_pmpi.h"
 #include "geopm_sched.h"
+#include "geopm_mpi_comm_split.h"
 #include "config.h"
 
 static int g_is_geopm_pmpi_ctl_enabled = 0;
-static int g_is_geopm_pmpi_prof_enabled = 0;
 static MPI_Comm g_geopm_comm_world_swap = MPI_COMM_WORLD;
 static MPI_Fint g_geopm_comm_world_swap_f = 0;
 static MPI_Fint g_geopm_comm_world_f = 0;
 static MPI_Comm g_ppn1_comm = MPI_COMM_NULL;
 static struct geopm_ctl_c *g_ctl = NULL;
+static int g_is_mpi_finalized = 0;
+#ifndef GEOPM_TEST
 static pthread_t g_ctl_thread;
+#endif
 
-/* To be used only in Profile.cpp */
-void geopm_pmpi_prof_enable(int do_profile)
+int geopm_is_comm_enabled(void)
 {
-    g_is_geopm_pmpi_prof_enabled = do_profile;
+    return !g_is_mpi_finalized;
 }
+
+int geopm_is_pmpi_prof_enabled(void);
 
 #ifndef GEOPM_PORTABLE_MPI_COMM_COMPARE_ENABLE
 /*
@@ -98,7 +106,7 @@ MPI_Fint geopm_swap_comm_world_f(MPI_Fint comm)
 
 void geopm_mpi_region_enter(uint64_t func_rid)
 {
-    if (g_is_geopm_pmpi_prof_enabled) {
+    if (geopm_is_pmpi_prof_enabled()) {
         if (func_rid) {
             geopm_prof_enter(func_rid);
         }
@@ -108,7 +116,7 @@ void geopm_mpi_region_enter(uint64_t func_rid)
 
 void geopm_mpi_region_exit(uint64_t func_rid)
 {
-    if (g_is_geopm_pmpi_prof_enabled) {
+    if (geopm_is_pmpi_prof_enabled()) {
         geopm_prof_exit(GEOPM_REGION_ID_MPI);
         if (func_rid) {
             geopm_prof_exit(func_rid);
@@ -119,19 +127,22 @@ void geopm_mpi_region_exit(uint64_t func_rid)
 uint64_t geopm_mpi_func_rid(const char *func_name)
 {
     uint64_t result = 0;
-    if (g_is_geopm_pmpi_prof_enabled) {
-       int err = geopm_prof_region(func_name, GEOPM_REGION_HINT_NETWORK, &result);
-       if (err) {
-           result = 0;
-       }
+    if (geopm_is_pmpi_prof_enabled()) {
+        int err = geopm_prof_region(func_name, GEOPM_REGION_HINT_NETWORK, &result);
+        if (err) {
+            result = 0;
+        }
     }
     return result;
 }
 
+#ifndef GEOPM_TEST
 static int geopm_pmpi_init(const char *exec_name)
 {
     int rank;
     int err = 0;
+    g_geopm_comm_world_swap_f = PMPI_Comm_c2f(MPI_COMM_WORLD);
+    g_geopm_comm_world_f = PMPI_Comm_c2f(MPI_COMM_WORLD);
     PMPI_Comm_rank(MPI_COMM_WORLD, &rank);
 #ifdef GEOPM_DEBUG
     if (geopm_env_debug_attach() == rank) {
@@ -144,8 +155,7 @@ static int geopm_pmpi_init(const char *exec_name)
     }
 #endif
     if (!err) {
-        struct geopm_policy_c *policy = NULL;
-        if (geopm_env_pmpi_ctl() == GEOPM_PMPI_CTL_PROCESS) {
+        if (geopm_env_pmpi_ctl() == GEOPM_CTL_PROCESS) {
             g_is_geopm_pmpi_ctl_enabled = 1;
             int is_ctl;
             MPI_Comm tmp_comm;
@@ -156,19 +166,12 @@ static int geopm_pmpi_init(const char *exec_name)
             else {
                 g_geopm_comm_world_swap = tmp_comm;
                 g_geopm_comm_world_swap_f = PMPI_Comm_c2f(g_geopm_comm_world_swap);
-                g_geopm_comm_world_f = PMPI_Comm_c2f(MPI_COMM_WORLD);
             }
             if (!err && is_ctl) {
                 int ctl_rank;
                 err = PMPI_Comm_rank(g_geopm_comm_world_swap, &ctl_rank);
-                if (!err && !ctl_rank) {
-                    err = geopm_policy_create(geopm_env_policy(), NULL, &policy);
-                    if (!err && policy == NULL) {
-                        err = GEOPM_ERROR_POLICY_NULL;
-                    }
-                }
                 if (!err) {
-                    err = geopm_ctl_create(policy, g_geopm_comm_world_swap, &g_ctl);
+                    err = geopm_ctl_create(g_geopm_comm_world_swap, &g_ctl);
                 }
                 if (!err) {
                     err = geopm_ctl_run(g_ctl);
@@ -178,7 +181,7 @@ static int geopm_pmpi_init(const char *exec_name)
                 exit(err);
             }
         }
-        else if (geopm_env_pmpi_ctl() == GEOPM_PMPI_CTL_PTHREAD) {
+        else if (geopm_env_pmpi_ctl() == GEOPM_CTL_PTHREAD) {
             g_is_geopm_pmpi_ctl_enabled = 1;
 
             int mpi_thread_level;
@@ -186,6 +189,9 @@ static int geopm_pmpi_init(const char *exec_name)
 #ifndef __APPLE__
             int num_cpu = geopm_sched_num_cpu();
             cpu_set_t *cpu_set = CPU_ALLOC(num_cpu);
+            if (NULL == cpu_set) {
+                err = ENOMEM;
+            }
 #endif
             if (!err) {
                 err = PMPI_Query_thread(&mpi_thread_level);
@@ -199,11 +205,8 @@ static int geopm_pmpi_init(const char *exec_name)
             if (!err && g_ppn1_comm != MPI_COMM_NULL) {
                 int ppn1_rank;
                 err = MPI_Comm_rank(g_ppn1_comm, &ppn1_rank);
-                if (!err && !ppn1_rank) {
-                    err = geopm_policy_create(geopm_env_policy(), NULL, &policy);
-                }
                 if (!err) {
-                    err = geopm_ctl_create(policy, g_ppn1_comm, &g_ctl);
+                    err = geopm_ctl_create(g_ppn1_comm, &g_ctl);
                 }
 #ifndef __APPLE__
                 if (!err) {
@@ -251,11 +254,13 @@ static int geopm_pmpi_finalize(void)
     int tmp_err = 0;
 
     if (!err && geopm_env_do_profile() &&
-        (!g_ctl || geopm_env_pmpi_ctl() == GEOPM_PMPI_CTL_PTHREAD)) {
+        (!g_ctl || geopm_env_pmpi_ctl() == GEOPM_CTL_PTHREAD))
+    {
+        PMPI_Barrier(g_geopm_comm_world_swap);
         err = geopm_prof_shutdown();
     }
 
-    if (g_ctl && geopm_env_pmpi_ctl() == GEOPM_PMPI_CTL_PTHREAD) {
+    if (g_ctl && geopm_env_pmpi_ctl() == GEOPM_CTL_PTHREAD) {
         void *return_val;
         err = pthread_join(g_ctl_thread, &return_val);
         err = err ? err : ((long)return_val);
@@ -277,14 +282,16 @@ static int geopm_pmpi_finalize(void)
     }
     return err;
 }
+#endif
 
 /* Below are the GEOPM PMPI wrappers */
 
+#ifndef GEOPM_TEST
 int MPI_Init(int *argc, char **argv[])
 {
     int err;
 
-    if (geopm_env_pmpi_ctl() == GEOPM_PMPI_CTL_PTHREAD) {
+    if (geopm_env_pmpi_ctl() == GEOPM_CTL_PTHREAD) {
         int required = MPI_THREAD_MULTIPLE;
         int mpi_thread_level;
         err = PMPI_Init_thread(argc, argv, required, &mpi_thread_level);
@@ -295,6 +302,7 @@ int MPI_Init(int *argc, char **argv[])
     else {
         err = PMPI_Init(argc, argv);
     }
+    PMPI_Barrier(MPI_COMM_WORLD);
     if (!err) {
         if (argv && *argv && **argv && strlen(**argv)) {
             err = geopm_pmpi_init(**argv);
@@ -324,8 +332,10 @@ int MPI_Finalize(void)
 {
     int err = geopm_pmpi_finalize();
     int err_final = PMPI_Finalize();
+    g_is_mpi_finalized = 1;
     return err ? err : err_final;
 }
+#endif
 
 /* Replace MPI_COMM_WORLD in all wrappers, but in the following
    blocking calls also profile with default profile */

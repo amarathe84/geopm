@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,16 +38,12 @@
 #include <dirent.h>
 #include <sys/mman.h>
 #include <signal.h>
-
+#include <limits.h>
 
 #include "Exception.hpp"
 #include "geopm_env.h"
 #include "geopm_signal_handler.h"
 #include "config.h"
-
-#ifndef NAME_MAX
-#define NAME_MAX 1024
-#endif
 
 extern "C"
 {
@@ -63,29 +59,14 @@ extern "C"
             case GEOPM_ERROR_INVALID:
                 strncpy(msg, "<geopm> Invalid argument", size);
                 break;
-            case GEOPM_ERROR_POLICY_NULL:
-                strncpy(msg, "<geopm> The geopm_policy_c pointer is NULL, use geopm_policy_create()", size);
-                break;
             case GEOPM_ERROR_FILE_PARSE:
                 strncpy(msg, "<geopm> Unable to parse input file", size);
                 break;
             case GEOPM_ERROR_LEVEL_RANGE:
                 strncpy(msg, "<geopm> Control hierarchy level is out of range", size);
                 break;
-            case GEOPM_ERROR_CTL_COMM:
-                strncpy(msg, "<geopm> Communication error in control hierarchy", size);
-                break;
-            case GEOPM_ERROR_SAMPLE_INCOMPLETE:
-                strncpy(msg, "<geopm> All children have not sent all samples", size);
-                break;
-            case GEOPM_ERROR_POLICY_UNKNOWN:
-                strncpy(msg, "<geopm> No policy has been set", size);
-                break;
             case GEOPM_ERROR_NOT_IMPLEMENTED:
                 strncpy(msg, "<geopm> Feature not yet implemented", size);
-                break;
-            case GEOPM_ERROR_NOT_TESTED:
-                strncpy(msg, "<geopm> Feature not yet tested", size);
                 break;
             case GEOPM_ERROR_PLATFORM_UNSUPPORTED:
                 strncpy(msg, "<geopm> Current platform not supported or unrecognized", size);
@@ -99,32 +80,14 @@ extern "C"
             case GEOPM_ERROR_MSR_WRITE:
                 strncpy(msg, "<geopm> Could not write to MSR device", size);
                 break;
-            case GEOPM_ERROR_OPENMP_UNSUPPORTED:
-                strncpy(msg, "<geopm> Not compiled with support for OpenMP", size);
-                break;
-            case GEOPM_ERROR_PROF_NULL:
-                strncpy(msg, "<geopm> The geopm_prof_c pointer is NULL, use geopm_prof_create()", size);
-                break;
-            case GEOPM_ERROR_DECIDER_UNSUPPORTED:
-                strncpy(msg, "<geopm> Specified Decider not supported or unrecognized", size);
-                break;
-            case GEOPM_ERROR_FACTORY_NULL:
-                strncpy(msg, "<geopm> The geopm_factory_c pointer is NULL, pass in a valid factory object", size);
-                break;
-            case GEOPM_ERROR_SHUTDOWN:
-                strncpy(msg, "<geopm> Shutdown policy has been signaled", size);
-                break;
-            case GEOPM_ERROR_TOO_MANY_COLLISIONS:
-                strncpy(msg, "<geopm> Too many collisions when inserting into hash table", size);
+            case GEOPM_ERROR_AGENT_UNSUPPORTED:
+                strncpy(msg, "<geopm> Specified Agent not supported or unrecognized", size);
                 break;
             case GEOPM_ERROR_AFFINITY:
                 strncpy(msg, "<geopm> MPI ranks are not affitinized to distinct CPUs", size);
                 break;
-            case GEOPM_ERROR_ENVIRONMENT:
-                strncpy(msg, "<geopm> Unset or invalid environment variable", size);
-                break;
-            case GEOPM_ERROR_COMM_UNSUPPORTED:
-                strncpy(msg, "<geopm> Communication implementation not supported", size);
+            case GEOPM_ERROR_NO_AGENT:
+                strncpy(msg, "<geopm> Requested agent is unavailable or invalid", size);
                 break;
             default:
 #ifndef _GNU_SOURCE
@@ -145,7 +108,7 @@ extern "C"
     void geopm_error_destroy_shmem(void)
     {
         int err = 0;
-        char err_msg[NAME_MAX];
+        char err_msg[2 * NAME_MAX];
         DIR *did = opendir("/dev/shm");
         if (did &&
             strlen(geopm_env_shmkey()) &&
@@ -162,7 +125,7 @@ extern "C"
                     strncpy(shm_key + 1, entry->d_name, NAME_MAX - 2);
                     err = shm_unlink(shm_key);
                     if (err) {
-                        snprintf(err_msg, NAME_MAX, "Warning: <geopm> unable to unlink \"%s\"", shm_key);
+                        snprintf(err_msg, 2 * NAME_MAX, "Warning: <geopm> unable to unlink \"%s\"", shm_key);
                         perror(err_msg);
                     }
                 }
@@ -176,7 +139,7 @@ namespace geopm
 
     static std::string error_message(int err);
 
-    int exception_handler(std::exception_ptr eptr)
+    int exception_handler(std::exception_ptr eptr, bool do_print)
     {
         int err = GEOPM_ERROR_RUNTIME;
         try {
@@ -190,35 +153,38 @@ namespace geopm
             const std::system_error *ex_sys = dynamic_cast<const std::system_error *>(&ex);
             const std::runtime_error *ex_rt = dynamic_cast<const std::runtime_error *>(&ex);
 
-            if (ex_geopm_signal) {
 #ifdef GEOPM_DEBUG
-                std::cerr << "Error: " << ex_geopm_signal->what() << std::endl;
+            do_print = true;
 #endif
+            if (ex_geopm_signal) {
+                if (do_print) {
+                    std::cerr << "Error: " << ex_geopm_signal->what() << std::endl;
+                }
                 err = ex_geopm->err_value();
                 raise(ex_geopm_signal->sig_value());
             }
             else if (ex_geopm) {
-#ifdef GEOPM_DEBUG
-                std::cerr << "Error: " << ex_geopm->what() << std::endl;
-#endif
+                if (do_print) {
+                    std::cerr << "Error: " << ex_geopm->what() << std::endl;
+                }
                 err = ex_geopm->err_value();
             }
             else if (ex_sys) {
-#ifdef GEOPM_DEBUG
-                std::cerr << "Error: " << ex_sys->what() << std::endl;
-#endif
+                if (do_print) {
+                    std::cerr << "Error: " << ex_sys->what() << std::endl;
+                }
                 err = ex_sys->code().value();
             }
             else if (ex_rt) {
-#ifdef GEOPM_DEBUG
-                std::cerr << "Error: " << ex_rt->what() << std::endl;
-#endif
+                if (do_print) {
+                    std::cerr << "Error: " << ex_rt->what() << std::endl;
+                }
                 err = errno ? errno : GEOPM_ERROR_RUNTIME;
             }
             else {
-#ifdef GEOPM_DEBUG
-                std::cerr << "Error: " << ex.what() << std::endl;
-#endif
+                if (do_print) {
+                    std::cerr << "Error: " << ex.what() << std::endl;
+                }
                 err = errno ? errno : GEOPM_ERROR_RUNTIME;
             }
         }
@@ -263,11 +229,6 @@ namespace geopm
 
     Exception::Exception(int err, const char *file, int line)
         : Exception("", err, file, line)
-    {
-
-    }
-
-    Exception::~Exception()
     {
 
     }

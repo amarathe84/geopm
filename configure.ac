@@ -1,4 +1,4 @@
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -46,6 +46,7 @@ AC_CONFIG_MACRO_DIR([m4])
 
 geopm_abi_version=0:0:0
 AC_SUBST(geopm_abi_version)
+AC_DEFINE_UNQUOTED([GEOPM_ABI_VERSION], ["$geopm_abi_version"], [GEOPM shared object verion])
 
 LT_PREREQ([2.2.6])
 
@@ -57,44 +58,6 @@ AC_ARG_VAR([MPIFC],
            [MPIFC the MPI Fortran compiler wrapper used to determine flags required for inclusion of MPI for Fortran.])
 AC_ARG_VAR([MPIF77],
            [MPIF77 the MPI Fortran 77 compiler wrapper used to determine flags required for inclusion of MPI for Fortran 77.])
-
-AC_ARG_WITH([hwloc], [AS_HELP_STRING([--with-hwloc=PATH],
-            [specify directory for installed hwloc package.])])
-if test "x$with_hwloc" != x; then
-  EXTRA_CPPFLAGS="$EXTRA_CPPFLAGS -I$with_hwloc/include"
-  LD_LIBRARY_PATH="$with_hwloc/lib:$LD_LIBRARY_PATH"
-  EXTRA_LDFLAGS="$EXTRA_LDFLAGS -L$with_hwloc/lib"
-fi
-AC_ARG_WITH([hwloc-include], [AS_HELP_STRING([--with-hwloc-include=PATH],
-            [specify directory for the installed hwloc include files.])])
-if test "x$with_hwloc_include" != x; then
-  EXTRA_CPPFLAGS="$EXTRA_CPPFLAGS -I$with_hwloc_include"
-fi
-AC_ARG_WITH([hwloc-lib], [AS_HELP_STRING([--with-hwloc-lib=PATH],
-            [specify directory for installed hwloc library])])
-if test "x$with_hwloc_lib" != x; then
-  LD_LIBRARY_PATH="$with_hwloc_lib:$LD_LIBRARY_PATH"
-  EXTRA_LDFLAGS="$EXTRA_LDFLAGS -L$with_hwloc_lib"
-fi
-
-AC_ARG_WITH([json], [AS_HELP_STRING([--with-json=PATH],
-            [specify directory for installed json-c package.])])
-if test "x$with_json" != x; then
-  EXTRA_CPPFLAGS="$EXTRA_CPPFLAGS -I$with_json/include"
-  LD_LIBRARY_PATH="$with_json/lib:$LD_LIBRARY_PATH"
-  EXTRA_LDFLAGS="$EXTRA_LDFLAGS -L$with_json/lib"
-fi
-AC_ARG_WITH([json-include], [AS_HELP_STRING([--with-json-include=PATH],
-            [specify directory for the installed json-c include files.])])
-if test "x$with_json_include" != x; then
-  EXTRA_CPPFLAGS="$EXTRA_CPPFLAGS -I$with_json_include"
-fi
-AC_ARG_WITH([json-lib], [AS_HELP_STRING([--with-json-lib=PATH],
-            [specify directory for installed json-c library])])
-if test "x$with_json_lib" != x; then
-  LIBRARY_PATH="$with_json_lib:$LD_LIBRARY_PATH"
-  EXTRA_LDFLAGS="$EXTRA_LDFLAGS -L$with_json_lib"
-fi
 
 AC_ARG_ENABLE([debug],
   [AS_HELP_STRING([--enable-debug], [Build debugging code and compile with -O0 -g])],
@@ -141,6 +104,17 @@ fi
 [enable_procfs="1"]
 )
 
+AC_ARG_ENABLE([msrsafe-ioctl-write],
+  [AS_HELP_STRING([--enable-msrsafe-ioctl-write], [Enable GEOPM to use msr-safe driver to use batch write ioctl facility which is broken as of msr-safe version 1.2.0])],
+[if test "x$enable_msrsafe_ioctl_write" = "xno" ; then
+  enable_msrsafe_ioctl_write="0"
+else
+  enable_msrsafe_ioctl_write="1"
+fi
+],
+[enable_msrsafe_ioctl_write="0"]
+)
+
 if test "x$enable_openmp" = "xno" ; then
   enable_openmp="0"
 else
@@ -172,6 +146,11 @@ if test "x$enable_procfs" = "x1" ; then
   AC_DEFINE([GEOPM_PROCFS], [ ], [Enables use of procfs for process CPU affinity])
 fi
 AC_SUBST([enable_procfs])
+
+if test "x$enable_msrsafe_ioctl_write" = "x1" ; then
+  AC_DEFINE([GEOPM_MSRSAFE_IOCTL_WRITE], [ ], [Enables user of msr-safe ioctl feature for writing (broken as of msr-safe version 1.2.0)])
+fi
+AC_SUBST([enable_msrsafe_ioctl_write])
 
 
 AC_SUBST([enable_openmp])
@@ -293,35 +272,6 @@ AC_LANG_POP([C++])
 [MPI_FCLIBS=$MPI_FLIBS]
 [MPI_FLIBS=$MPI_F77LIBS]
 
-# WORK AROUND FOR SLES-12.
-#
-# The version of openmpi installed on SLES-12 has an mpicc wrapper
-# which emits the include flag for the version of hwloc compiled into
-# the mpi library.  This forces the geopm objects which use MPI to be
-# derived from source files that include the openmpi version of the
-# hwloc header.  The geopm objects which do not require MPI will
-# derived from source files that include the system version in
-# /usr/include which is always searched after all non-system -I
-# options have been exhausted.
-#
-# https://gcc.gnu.org/onlinedocs/cpp/System-Headers.html#System-Headers
-#
-# The hwloc interface is based on enums that change frequently with
-# version number (not a great feature) and we would like to use
-# configure to cononicalize the hwloc interface with the
-# GEOPM_HWLOC_HAS_* defines above.  This forces us to use one version
-# of hwloc for MPI and non-MPI objects.  To enable this to be the
-# system version we remove the include path for the openmpi version of
-# hwloc compiled into the mpi library from the MPI_CLFAGS and
-# MPI_CXXFLAGS.
-#
-# I would recommend that in the future SLES either not package hwloc
-# or not allow the mpicc compiler wrapper to emit the include path for
-# the openmpi versioned hwloc.  Alternatively the openmpi hwloc header
-# should be versioned i.e. hwloc.h -> hwloc172.h.
-#
-[MPI_CFLAGS=`echo $MPI_CFLAGS | sed 's|-I/usr/lib64/mpi/gcc/openmpi/include/openmpi/opal/mca/hwloc/hwloc[0-9]*/hwloc/include||'`]
-[MPI_CXXFLAGS=`echo $MPI_CXXFLAGS | sed 's|-I/usr/lib64/mpi/gcc/openmpi/include/openmpi/opal/mca/hwloc/hwloc[0-9]*/hwloc/include||'`]
 [MPI_FCFLAGS=`echo $MPI_FCFLAGS | sed 's|-lmpigi||'`]
 [MPI_FFFLAGS=`echo $MPI_FFFLAGS | sed 's|-lmpigi||'`]
 
@@ -353,6 +303,7 @@ AM_CONDITIONAL([ENABLE_SCHED], [test "x$enable_sched" = "x1"])
 
 AC_SEARCH_LIBS([shm_open], [rt])
 AC_SEARCH_LIBS([shm_unlink], [rt])
+AC_SEARCH_LIBS([dlopen], [dl dld])
 
 # Checks for programs.
 AC_PROG_AWK
@@ -373,20 +324,6 @@ AC_CHECK_LIB([pthread], [pthread_mutex_init], [], [
     exit -1])
 AC_CHECK_HEADER([pthread.h], [], [
     echo "missing pthread.h: POSIX thread interface is required"
-    exit -1])
-AC_CHECK_LIB([hwloc], [hwloc_topology_init], [], [
-    echo "missing libhwloc: <http://www.open-mpi.org/projects/hwloc> use --with-hwloc or --with-hwloc-lib"
-    exit -1])
-AC_CHECK_LIB([hwloc], [hwloc_topology_dup], [
-    AC_DEFINE([GEOPM_HWLOC_HAS_TOPOLOGY_DUP], [1], [hwloc supports hwloc_topology_dup.])], [])
-AC_CHECK_HEADER([hwloc.h], [], [
-    echo "missing hwloc.h: <http://www.open-mpi.org/projects/hwloc> use --with-hwloc or --with-hwloc-include"
-    exit -1])
-AC_CHECK_LIB([json-c], [json_tokener_parse], [], [
-    echo "missing libjson-c: <https://github.com/json-c/json-c/wiki> use --with-json or --with-json-lib"
-    exit -1])
-AC_CHECK_HEADER([json-c/json.h], [], [
-    echo "missing json-c/json.h: <https://github.com/json-c/json-c/wiki> use --with-json or --with-json-include"
     exit -1])
 
 AC_CHECK_HEADER([xmmintrin.h], [AC_DEFINE([GEOPM_HAS_XMMINTRIN], [1], [xmmintrin.h is available])], [])
@@ -435,38 +372,28 @@ AC_TYPE_UINT64_T
 # Checks for library functions.
 AC_CHECK_FUNCS([clock_gettime dup2 floor getcwd memset mkfifo pow sqrt strdup strstr])
 
-AC_MSG_CHECKING([that hwloc supports HWLOC_OBJ_SOCKET])
+AC_LANG_PUSH([C++])
+AC_MSG_CHECKING([that double is 64 bits])
 AC_COMPILE_IFELSE([
-    AC_LANG_PROGRAM([[#include <hwloc.h>]],
-            [[hwloc_topology_t m_topo;
-            hwloc_topology_init(&m_topo);
-            hwloc_topology_load(m_topo);
-            int depth = hwloc_get_type_depth(m_topo, HWLOC_OBJ_SOCKET);]])
+    AC_LANG_PROGRAM([[#include <assert.h>]],
+            [[static_assert(sizeof(double) == 8, "size of double is not 64 bits");]])
 ],[
     AC_MSG_RESULT(yes)
-    AC_DEFINE([GEOPM_HWLOC_HAS_SOCKET], [1], [hwloc supports HWLOC_OBJ_SOCKET.])
 ],[
     AC_MSG_RESULT(no)
+    AC_MSG_FAILURE([sizeof double must equal 64 bits])
 ])
 
-AC_MSG_CHECKING([that hwloc supports HWLOC_OBJ_L2CACHE])
-AC_COMPILE_IFELSE([
-    AC_LANG_PROGRAM([[#include <hwloc.h>]],
-            [[hwloc_topology_t m_topo;
-            hwloc_topology_init(&m_topo);
-            hwloc_topology_load(m_topo);
-            int size = hwloc_get_nbobjs_by_type(m_topo, HWLOC_OBJ_L2CACHE);]])
-],[
-    AC_MSG_RESULT(yes)
-    AC_DEFINE([GEOPM_HWLOC_HAS_L2CACHE], [1], [hwloc supports HWLOC_OBJ_L2CACHE.])
-],[
-    AC_MSG_RESULT(no)
-])
+AC_LANG_POP([C++])
 
 AM_CONDITIONAL([HAVE_GFORTRAN], [test ! -z "$FC" && $FC --version | grep "GNU Fortran" > /dev/null])
 AM_CONDITIONAL([HAVE_IFORT], [test ! -z "$FC" && $FC --version | grep ifort > /dev/null])
 AM_CONDITIONAL([HAVE_ICC], [test ! -z "$CC" && $CC --version | grep icc > /dev/null])
 AM_CONDITIONAL([HAVE_ICPC], [test ! -z "$CXX" && $CXX --version | grep icpc > /dev/null])
+
+if [ ! -z "$CC" ] && [ $CC --version | grep icc > /dev/null]; then
+   AC_DEFINE([GEOPM_ENABLE_MKL], [], [Compiling with Intel MKL support.])
+fi
 
 AC_MSG_CHECKING([for support for MPI-3 standard])
 AC_COMPILE_IFELSE([
@@ -531,7 +458,10 @@ AC_SUBST([AM_LDFLAGS])
 AC_SUBST_FILE([CHANGELOG])
 CHANGELOG=ChangeLog
 
-AC_CONFIG_FILES([Makefile geopm.spec geopm-ohpc.spec scripts/geopmpy/version.py])
+AC_SUBST_FILE([BLURB])
+BLURB=BLURB
+
+AC_CONFIG_FILES([Makefile geopm.spec geopm-ohpc.spec geopm-theta.spec scripts/geopmpy/version.py])
 AC_OUTPUT
 
 # ============================================================================

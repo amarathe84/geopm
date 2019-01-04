@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,7 +35,7 @@
 #include <mpi.h>
 #include <geopm.h>
 
-#include "imbalancer.h"
+#include "geopm_imbalancer.h"
 #include "tutorial_region.h"
 
 
@@ -75,13 +75,13 @@ int main(int argc, char **argv)
             err = geopm_prof_enter(dgemm_rid);
         }
         if (!err) {
-            err = imbalancer_enter();
+            err = geopm_imbalancer_enter();
         }
         if (!err) {
             err = tutorial_dgemm_static(dgemm_big_o, 0);
         }
         if (!err) {
-            err = imbalancer_exit();
+            err = geopm_imbalancer_exit();
         }
         if (!err) {
             err = geopm_prof_exit(dgemm_rid);

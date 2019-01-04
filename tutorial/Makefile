@@ -1,5 +1,5 @@
 #
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -30,14 +30,26 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-TUTORIAL_BIN = tutorial_0 tutorial_1 tutorial_2 tutorial_3 tutorial_4 tutorial_5 tutorial_6
+TUTORIAL_BIN = tutorial_0 \
+               tutorial_1 \
+               tutorial_2 \
+               tutorial_3 \
+               tutorial_4 \
+               tutorial_5 \
+               # end
+
+TUTORIAL_LIB = agent/libgeopmagent_example_agent.so.0.0.0 \
+               iogroup/libgeopmiogroup_example_iogroup.so.0.0.0 \
+               # end
+
+GEOPM_PLUGIN_FLAGS=-fPIC -shared
 
 CC ?= gcc
 CXX ?= g++
 MPICC ?= mpicc
 MPICXX ?= mpicxx
 
-all: $(TUTORIAL_BIN)
+all: $(TUTORIAL_BIN) $(TUTORIAL_LIB)
 
 tutorial_0.o: tutorial_0.c
 	$(MPICC) -c $^ $(CFLAGS) -o $@
@@ -66,7 +78,7 @@ tutorial_3: tutorial_3.o tutorial_region.o
 tutorial_4.o: tutorial_4.c
 	$(MPICC) -c $^ $(CFLAGS) -o $@
 
-tutorial_4: tutorial_4.o imbalancer.o tutorial_region.o
+tutorial_4: tutorial_4.o tutorial_region.o
 	$(MPICC) $^ $(LDFLAGS) -lgeopm -lstdc++ -o $@
 
 tutorial_5.o: tutorial_5.c
@@ -75,25 +87,28 @@ tutorial_5.o: tutorial_5.c
 tutorial_5: tutorial_5.o tutorial_region.o
 	$(MPICC) $^ $(LDFLAGS) -lgeopm -lstdc++ -o $@
 
-tutorial_6.o: tutorial_6.cpp
-	$(MPICXX) -c $^ $(CXXFLAGS) -I../src -o $@
-
-tutorial_6: tutorial_6.o ModelApplication.o ModelRegion.o imbalancer.o
-	$(MPICXX) $^ $(LDFLAGS) -ljson-c -lgeopm -o $@
-
 tutorial_region.o: tutorial_region.c tutorial_region.h
 	$(MPICC) -c tutorial_region.c $(CFLAGS) -o $@
 
-imbalancer.o: Imbalancer.cpp imbalancer.h
-	$(CXX) -c Imbalancer.cpp $(CXXFLAGS) -I../src -o $@
+agent/libgeopmagent_example_agent.so.0.0.0: agent/ExampleAgent.cpp agent/ExampleAgent.hpp
+	$(CXX) agent/ExampleAgent.cpp $(CXXFLAGS) -I ./agent $(LDFLAGS) $(GEOPM_PLUGIN_FLAGS) -o $@
 
-ModelApplication.o: ModelApplication.cpp ModelApplication.hpp
-	$(MPICXX) -c ModelApplication.cpp $(CXXFLAGS) -I../src -o $@
 
-ModelRegion.o: ModelRegion.cpp ModelRegion.hpp
-	$(MPICXX) -c ModelRegion.cpp $(CXXFLAGS) -I../src -o $@
+iogroup/libgeopmiogroup_example_iogroup.so.0.0.0: iogroup/ExampleIOGroup.cpp iogroup/ExampleIOGroup.hpp
+	$(CXX) iogroup/ExampleIOGroup.cpp $(CXXFLAGS) -I ./iogroup $(LDFLAGS) $(GEOPM_PLUGIN_FLAGS) -o $@
+
 
 clean:
-	rm -f $(TUTORIAL_BIN) *.o
+	rm -f $(TUTORIAL_BIN) $(TUTORIAL_LIB) *.o
 
-.PHONY: all clean
+check: all
+	./tutorial_0.sh
+	./tutorial_1.sh
+	./tutorial_2.sh
+	./tutorial_3.sh
+	./tutorial_4.sh
+	./tutorial_5.sh
+	./tutorial_6.sh
+
+.PHONY: all clean check
+

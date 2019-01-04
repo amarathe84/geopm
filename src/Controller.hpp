@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,73 +33,45 @@
 #ifndef CONTROLLER_HPP_INCLUDE
 #define CONTROLLER_HPP_INCLUDE
 
-#include <vector>
+#include <pthread.h>
+
 #include <string>
-#include <stack>
-#include <mpi.h>
-
-#include "SampleRegulator.hpp"
-#include "TreeCommunicator.hpp"
-#include "PlatformFactory.hpp"
-#include "DeciderFactory.hpp"
-#include "Region.hpp"
-#include "GlobalPolicy.hpp"
-#include "Profile.hpp"
-#include "Tracer.hpp"
-#include "geopm_time.h"
-#include "geopm_plugin.h"
-
+#include <memory>
+#include <vector>
+#include <map>
 
 namespace geopm
 {
-    /// @brief Class used to launch or step the global extensible
-    ///        open power manager algorithm.
-    ///
-    /// The Controller class enables several methods of control:
-    /// explicit stepping of the control algorithm by the application
-    /// under control, running the control algorithm as a distinct
-    /// processes from the application under control, running the
-    /// control algorithm as a separate pthread owned by the
-    /// application process under control, or the application under
-    /// control can spawn a new MPI communicator that runs the control
-    /// algorithm in conjunction with its own distinct MPI_COMM_WORLD.
-    /// Each of these methods has different requirements and trade
-    /// offs.
-    ///
-    ///
-    /// The Controller is the central execution class for the geopm
-    /// runtime, and interacts with many other geopm classes and
-    /// coordinates their actions.  The controller gathers policy data
-    /// from the GlobalPolicy, application profile data from the
-    /// Profile (through shared memory), and hardware profile
-    /// information from the Platform.  It uses the TreeCommunicator
-    /// class to communicate policy and sample data between compute
-    /// nodes.
-    ///
-    /// The Controller class is the C++ implementation of the
-    /// geopm_ctl_c interface.  The class methods support the C
-    /// interface defined for use with the geopm_ctl_c structure and
-    /// are named accordingly.  The geopm_ctl_c structure is an
-    /// opaque reference to the Controller class.
+    class Comm;
+    class IPlatformIO;
+    class IManagerIOSampler;
+    class IApplicationIO;
+    class IReporter;
+    class ITracer;
+    class ITreeComm;
+    class Agent;
 
     class Controller
     {
         public:
-            /// @brief Controller constructor.
+            /// @brief Standard contstructor for the Controller.
             ///
-            /// The Controller construction requires a reference to a
-            /// GlobalPolicy object, the shared memory key used to
-            /// communicate with the application, and the MPI
-            /// communicator that the controller is running on.
-            ///
-            /// @param [in] global_policy A reference to the
-            ///        GlobalPolicy object used to configure policy
-            ///        for the entire allocation.
-            ///
-            /// @param [in] comm The MPI communicator that supports
+            /// @param [in] ppn1_comm The MPI communicator that supports
             ///        the control messages.
-            Controller(IGlobalPolicy *global_policy, MPI_Comm comm);
-            /// @brief Controller destructor, virtual.
+            Controller(std::shared_ptr<Comm> ppn1_comm);
+            /// @brief Constructor for testing that allows injecting mocked
+            ///        versions of internal objects.
+            Controller(std::shared_ptr<Comm> comm,
+                       IPlatformIO &plat_io,
+                       const std::string &agent_name,
+                       int num_send_up,
+                       int num_send_down,
+                       std::unique_ptr<ITreeComm> tree_comm,
+                       std::shared_ptr<IApplicationIO> application_io,
+                       std::unique_ptr<IReporter> reporter,
+                       std::unique_ptr<ITracer> tracer,
+                       std::vector<std::unique_ptr<Agent> > level_agent,
+                       std::unique_ptr<IManagerIOSampler> manager_io_sampler);
             virtual ~Controller();
             /// @brief Run control algorithm.
             ///
@@ -108,19 +80,30 @@ namespace geopm
             /// call that never returns, it is intended that profiling
             /// information is provided through POSIX shared memory.
             void run(void);
-            /// @brief Execute one step in the hierarchical control
-            ///        algorithm.
+            /// @brief Run a single step of the control algorithm.
             ///
-            /// The call to step() is a blocking call for those
-            /// processes that are the lowest MPI rank on the compute
-            /// node (based on the communicator that was used to
-            /// construct the Controller) and a no-op for those that
-            /// are not.  A call to this method sends samples up the
-            /// tree, then policies down the tree, and finally if the
-            /// policy has been changed for the node of the calling
-            /// process then the policy is enforced by writing MSR
-            /// values.
+            /// One step consists of receiving policy information from
+            /// the resource manager, sending them to every other
+            /// controller that the node is a parent of, and reading
+            /// hardware telemetry.
             void step(void);
+            /// @brief Propagate policy information from the resource
+            ///        manager at the root of the tree down to the
+            ///        controllers on every node.
+            ///
+            /// At each level of the tree, Agents may modify policies
+            /// before sending them to their children.
+            void walk_down(void);
+            /// @brief Read hardware telemetry and application data
+            ///        and send the combined data up the tree to the
+            ///        resource manager.
+            ///
+            /// At each level of the tree, Agents may modify and
+            /// aggregate samples before sending them up up to their
+            /// parents.
+            void walk_up(void);
+            /// @brief Write the report file and finalize the trace.
+            void generate(void);
             /// @brief Run control algorithm as a separate thread.
             ///
             /// Creates a POSIX thread running the control algorithm
@@ -136,90 +119,39 @@ namespace geopm
             /// @param [out] thread Pointer to the POSIX thread that
             ///        is created.
             void pthread(const pthread_attr_t *attr, pthread_t *thread);
-            /// @brief Run control algorithm on a separate MPI
-            ///        communicator.
-            ///
-            /// Uses MPI_Comm_spawn() to spawn a new communicator with
-            /// one process per compute node.  The geopmctl
-            /// application will be spawned on this communicator which
-            /// will communicate with the primary compute application
-            /// through POSIX shared memory.
-            void spawn(void);
-            /// @brief Number of levels in the control hierarchy.
-            ///
-            /// Returns the depth of the balanced tree used for
-            /// hierarchical control.  The tree always has a root and
-            /// at least one set of children, so the minimum number of
-            /// levels is two.
-            ///
-            ///  @return Number of hierarchy levels.
-            int num_level(void) const;
-            void generate_report(void);
-            /// @brief Reset system to initial state.
-            ///
-            /// This will remove the shared memory keys and will reset
-            /// all MSR values that GEO can alter to the value that was
-            /// read at GEO startup.
-            void reset(void);
-        protected:
-            enum m_controller_const_e {
-                M_MAX_FAN_OUT = 16,
-                M_SHMEM_REGION_SIZE = 12288,
-            };
-            void signal_handler(void);
-            void check_signal(void);
-            void connect(void);
-            void walk_down(void);
-            void walk_up(void);
-            void override_telemetry(double progress);
-            void update_region(void);
-            void update_epoch(std::vector<struct geopm_telemetry_message_s> &telemetry);
-            bool m_is_node_root;
-            int m_max_fanout;
-            std::vector<int> m_fan_out;
-            const IGlobalPolicy *m_global_policy;
-            ITreeCommunicator *m_tree_comm;
-            std::vector<IDecider *> m_decider;
-            DeciderFactory *m_decider_factory;
-            PlatformFactory *m_platform_factory;
-            Platform *m_platform;
-            IProfileSampler *m_sampler;
-            ISampleRegulator *m_sample_regulator;
-            ITracer *m_tracer;
-            std::vector<std::pair<uint64_t, struct geopm_prof_message_s> > m_prof_sample;
-            std::vector<struct geopm_msr_message_s> m_msr_sample;
-            std::vector<struct geopm_telemetry_message_s> m_telemetry_sample;
-            // Per level vector of maps from region identifier to region object
-            std::vector<std::map <uint64_t, IRegion *> > m_region;
-            std::vector<IPolicy *> m_policy;
-            std::vector<struct geopm_policy_message_s> m_last_policy_msg;
-            std::vector<struct geopm_sample_message_s> m_last_sample_msg;
-            std::vector<uint64_t> m_region_id;
-            // Per rank vector counting number of entries into MPI.
-            std::vector<uint64_t> m_num_mpi_enter;
-            std::vector<bool> m_is_epoch_changed;
-            uint64_t m_region_id_all;
-            bool m_do_shutdown;
-            bool m_is_connected;
-            int m_update_per_sample;
-            int m_sample_per_control;
-            int m_control_count;
-            int m_rank_per_node;
-            double m_epoch_time;
-            double m_mpi_sync_time;
-            double m_mpi_agg_time;
-            double m_hint_ignore_time;
-            double m_ignore_agg_time;
-            uint64_t m_sample_count;
-            uint64_t m_throttle_count;
-            double m_throttle_limit_mhz;
-            // Per rank vector tracking time of last entry into MPI.
-            std::vector<struct geopm_time_s> m_mpi_enter_time;
-            struct geopm_time_s m_app_start_time;
-            double m_counter_energy_start;
-            MPI_Comm m_ppn1_comm;
-            int m_ppn1_rank;
+            /// @brief Configure the trace with custom columns from
+            ///        the Agent.
+            void setup_trace(void);
+            /// @brief Called upon failure to facilitate graceful destruction
+            ///        of the Controller and notify application.
+            void abort(void);
+        private:
+            void init_agents(void);
+
+            std::shared_ptr<Comm> m_comm;
+            IPlatformIO &m_platform_io;
+            std::string m_agent_name;
+            const int m_num_send_down;
+            const int m_num_send_up;
+            std::unique_ptr<ITreeComm> m_tree_comm;
+            const int m_num_level_ctl;
+            const int m_max_level;
+            const int m_root_level;
+            std::shared_ptr<IApplicationIO> m_application_io;
+            std::unique_ptr<IReporter> m_reporter;
+            std::unique_ptr<ITracer> m_tracer;
+            std::vector<std::unique_ptr<Agent> > m_agent;
+            const bool m_is_root;
+            std::vector<double> m_in_policy;
+            std::vector<std::vector<std::vector<double> > > m_out_policy;
+            std::vector<std::vector<std::vector<double> > > m_in_sample;
+            std::vector<double> m_out_sample;
+            std::vector<double> m_trace_sample;
+
+            std::unique_ptr<IManagerIOSampler> m_manager_io_sampler;
+
+            std::vector<std::string> m_agent_policy_names;
+            std::vector<std::string> m_agent_sample_names;
     };
 }
-
 #endif

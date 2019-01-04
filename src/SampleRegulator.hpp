@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,12 +36,15 @@
 #include <vector>
 #include <set>
 #include <map>
+#include <memory>
 
-#include "CircularBuffer.hpp"
-#include "geopm_message.h"
+#include "geopm_time.h"
 
 namespace geopm
 {
+    template <class type>
+    class ICircularBuffer;
+
     /// @brief Class merges Platform and Profile time series data.
     ///
     /// The SampleRegulator class is a functor used by the Controller
@@ -74,9 +77,9 @@ namespace geopm
     class ISampleRegulator
     {
         public:
-            ISampleRegulator() {}
-            ISampleRegulator(const ISampleRegulator &other) {}
-            virtual ~ISampleRegulator() {}
+            ISampleRegulator() = default;
+            ISampleRegulator(const ISampleRegulator &other) = default;
+            virtual ~ISampleRegulator() = default;
             /// @brief The parenthesis operator which implements the
             /// SampleRegulator functor.
             ///
@@ -140,15 +143,15 @@ namespace geopm
             /// rank.
             SampleRegulator(const std::vector<int> &cpu_rank);
             /// @brief SampleRegulator destructor, virtual.
-            virtual ~SampleRegulator();
+            virtual ~SampleRegulator() = default;
             void operator () (const struct geopm_time_s &platform_sample_time,
                               std::vector<double>::const_iterator platform_sample_begin,
                               std::vector<double>::const_iterator platform_sample_end,
                               std::vector<std::pair<uint64_t, struct geopm_prof_message_s> >::const_iterator prof_sample_begin,
                               std::vector<std::pair<uint64_t, struct geopm_prof_message_s> >::const_iterator prof_sample_end,
                               std::vector<double> &aligned_signal,
-                              std::vector<uint64_t> &region_id);
-            const std::map<int, int> &rank_idx_map(void) const;
+                              std::vector<uint64_t> &region_id) override;
+            const std::map<int, int> &rank_idx_map(void) const override;
         protected:
             /// @brief Insert ProfileSampler data.
             void insert(std::vector<std::pair<uint64_t, struct geopm_prof_message_s> >::const_iterator prof_sample_begin,
@@ -163,7 +166,6 @@ namespace geopm
             struct m_rank_sample_s {
                 struct geopm_time_s timestamp;
                 double progress;
-                double runtime;
             };
             enum m_num_rank_signal_e {
                 M_NUM_RANK_SIGNAL = 2,
@@ -183,7 +185,7 @@ namespace geopm
             std::vector<uint64_t> m_region_id;
             /// @brief Per rank record of last profile samples in
             /// m_region_id_prev
-            std::vector<ICircularBuffer<struct m_rank_sample_s> *> m_rank_sample_prev;
+            std::vector<std::unique_ptr<ICircularBuffer<struct m_rank_sample_s> > > m_rank_sample_prev;
             /// @brief The platform sample time.
             struct geopm_time_s m_aligned_time;
             /// @brief Vector to multiply with signal_domain_matrix to

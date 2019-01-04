@@ -1,0 +1,304 @@
+geopmlauncher(1) -- application launch wrapper
+=================================================
+
+[//]: # (Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation)
+[//]: # ()
+[//]: # (Redistribution and use in source and binary forms, with or without)
+[//]: # (modification, are permitted provided that the following conditions)
+[//]: # (are met:)
+[//]: # ()
+[//]: # (    * Redistributions of source code must retain the above copyright)
+[//]: # (      notice, this list of conditions and the following disclaimer.)
+[//]: # ()
+[//]: # (    * Redistributions in binary form must reproduce the above copyright)
+[//]: # (      notice, this list of conditions and the following disclaimer in)
+[//]: # (      the documentation and/or other materials provided with the)
+[//]: # (      distribution.)
+[//]: # ()
+[//]: # (    * Neither the name of Intel Corporation nor the names of its)
+[//]: # (      contributors may be used to endorse or promote products derived)
+[//]: # (      from this software without specific prior written permission.)
+[//]: # ()
+[//]: # (THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS)
+[//]: # ("AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT)
+[//]: # (LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR)
+[//]: # (A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT)
+[//]: # (OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,)
+[//]: # (SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT)
+[//]: # (LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,)
+[//]: # (DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY)
+[//]: # (THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT)
+[//]: # ((INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY LOG OF THE USE)
+[//]: # (OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.)
+
+## SYNOPSIS
+
+`geopmlaunch` launcher [_LAUNCHER_OPTIONS_] [_OPTIONS_] `--` executable [_exec-args_]
+
+
+## DESCRIPTION
+The GEOPM launcher enables users to launch the GEOPM runtime with a
+simple command line interface extension to the resource manager's
+underlying job launch mechanism deployed on their system.  The
+currently supported job launch mechanisms are `srun` from the SLURM
+package and `aprun` from the ALPS package.  The GEOPM package installs
+the `geopmlaunch` executable which runs the
+geopmpy.launcher.main() method in the geopmpy python package.  This
+interface extends the resource manager's job launch application with
+GEOPM-specific flags.  All application launch options accepted by the
+underlying launch application (e.g. `srun` or `aprun`) can be passed
+to the `geopmlaunch` wrapper with the exception of CPU affinity related
+options.  The wrapper script reinterprets the command line to set
+environment variables and pass modified options to the underlying job
+launch application.  The reinterpreted command line is echoed to
+standard output by the script before execution.  The wrapper sets
+environment variables used by GEOPM which are described in
+**geopm(7)**, sets process CPU affinity to meet the requirements of
+GEOPM, and may increase the ranks per node or CPUs per process as
+required by the GEOPM runtime.
+
+Note: the primary compute executable and its command line options must
+appear at the end of the command line and be preceded by two dashes:
+`--`. The GEOPM launcher will stop parsing arguments following the `--`
+sequence and pass the arguments that follow unaltered while removing
+the first `--` from the command line.
+
+## SUPPORTED LAUNCHERS
+  The first positional argument is required and specifies the desired
+  underlying launch mechanism.  Valid values are "srun", "aprun", or "impi".
+  Additionally the launcher class that supports the resource manager can be
+  selected by name; available launcher classes are "SrunLauncher"
+  (SLURM), "AlpsLauncher" (ALPS), "IMPIExecLauncher" (IMPI), or
+  "SrunTOSSLauncher" (specialization of SLURM for the tri-lab
+  operating system stack).  This command line option overrides other
+  methods of determining the resource manager / launcher.  This option is
+  used by the launcher to set the GEOPM_RM environment variable.  The
+  command line argument will override any value currently set in the environment.
+  See the ENVIRONMENT section of **geopm(7)**.
+
+## OPTIONS
+* `--geopm-ctl` _process_|_pthread_|_application_:
+  Use GEOPM runtime and launch GEOPM with one of three methods:
+  _process_, _pthread_ or _application_.  The _process_ method
+  allocates one extra MPI process per node for the GEOPM controller.
+  The _pthread_ method spawns a thread from one MPI process per node
+  to run the GEOPM controller.  The _application_ method launches the
+  **geopmctl(1)** application in the background which connects to the
+  primary compute application.  The _process_ method can be used in
+  the widest variety of cases, but some systems require that each MPI
+  process be assigned the same number of CPUs which may waste
+  resources by assigning more than one CPU to the GEOPM controller
+  process.  The _pthread_ option requires support for
+  MPI_THREAD_MULTIPLE which is not enabled at many sites and on some
+  systems affinitizing one extra CPU to the MPI process that threads
+  out the controller may be not be possible resulting in running the
+  GEOPM controller on the same CPU as the main compute application.
+  The _application_ method of launch is not compatible with `aprun`;
+  with `srun`, the call must be made inside of an existing
+  allocation made with salloc or sbatch and the command must request
+  all of the compute nodes assigned to the allocation.  Note: if the
+  `--geopm-ctl` option is not specified the launcher script simply
+  passes all command line arguments to the system application launcher
+  without modification.  This option is used by the launcher to set
+  the GEOPM_CTL environment variable.  The command line option
+  will override any value currently set in the environment.  See the
+  ENVIRONMENT section of **geopm(7)**.
+
+* `--geopm-policy` policy:
+  GEOPM policy JSON file used to configure the Agent plugin.  To
+  provide a shared memory region name, `--geopm-endpoint` should be
+  used instead.  See **geopmagent(1)** and **geopm_agent_c(3)** for
+  more information about how to create this input file.  This option
+  is used by the launcher to set the GEOPM_POLICY environment
+  variable.  The command line option will override any value currently
+  set in the environment.  See the ENVIRONMENT section of
+  **geopm(7)**.
+
+* `--geopm-endpoint` endpoint:
+
+  Basename for the policy and sample shared memory regions used to
+  communicate with the resource manager.  This allows the resource
+  manager to dynamically control GEOPM plugins and collect feedback at
+  runtime.  See **geopmendpoint(1)** and **geopm_endpoint_c(3)** to
+  learn about creating the shared memory region.  This option is used
+  by the launcher to set the GEOPM_ENDPOINT environment variable.  The
+  command line option will override any value currently set in the
+  environment.  See the ENVIRONMENT section of **geopm(7)**.
+
+* `--geopm-shmkey` key:
+  Specify a special prefix to be used with all of the shared memory
+  keys generated by the GEOPM runtime.  This is useful for avoiding
+  collisions with keys that were not properly cleaned up.  The default
+  key prefix is "geopm-shm".  This option is used by the launcher to
+  set the GEOPM_SHMKEY environment variable.  The command line option
+  will override any value currently set in the environment.  See the
+  ENVIRONMENT section of **geopm(7)**.
+
+* `--geopm-timeout` sec:
+  Time in seconds that the application should wait for the GEOPM
+  controller to connect over shared memory.  The default value is 30
+  seconds.  This option is used by the launcher to set the
+  GEOPM_PROFILE_TIMEOUT environment variable.  The command line option
+  will override any value currently set in the environment.  See the
+  ENVIRONMENT section of **geopm(7)**.
+
+* `--geopm-report` path:
+  Path to the GEOPM report output file describing the profiling
+  information collected by GEOPM.  This file is generated at the
+  conclusion of the run if this option is given and will be written to
+  the file system path specified or current directory if only a file
+  name is given.  The report is a single file contains information
+  about runtimes, MPI usage, and power consumption for each node.  The
+  report is broken down by region if the application has been
+  annotated with the GEOPM region interface.  Note that the sampled
+  values for 'energy' and 'sync-runtime' are added to the total for a
+  region only when all ranks are in a region; otherwise they are added
+  to the unmarked region.  The epoch region and application total
+  energy are not calculated by sampling but rather through start and
+  end values.  When comparing energy and time values from the report,
+  care should be taken to use 'runtime' in the case of epoch and
+  application totals, and 'sync-runtime' for all other regions.  This
+  option is used by the launcher to set the GEOPM_REPORT environment
+  variable.  The command line option will override any value currently
+  set in the environment.  See the ENVIRONMENT section of
+  **geopm(7)**.
+
+* `--geopm-trace` path:
+  The base name and path of the trace file(s) generated if this option
+  is specified.  One trace file is generated for each compute node
+  used by the application containing a pipe-delimited ASCII table
+  describing a time series of measurements made by the GEOPM runtime.
+  The path is extended with the host name of the node for each created
+  file.  The trace files will be written to the file system path
+  specified or current directory if only a file name is given.  This
+  feature is primarily a debugging tool, and may not scale to large
+  node counts due to file system issues.  This option is used by the
+  launcher to set the GEOPM_TRACE environment variable.  The command
+  line option will override any value currently set in the
+  environment.  See the ENVIRONMENT section of **geopm(7)**.
+
+* `--geopm-trace-signals` signals:
+  A comma-separated list of signal names to be added as columns in the
+  trace.  This option has no effect unless tracing is enabled with
+  `--geopm-trace`.  The signal names must be valid for the platform
+  and will be sampled for the entire node.  Refer to the documentation
+  for GEOPM_TRACE_SIGNALS in **geopm(7)** for a list of valid signal
+  names. For example, the following will add total DRAM energy and
+  power as columns in the trace:
+
+  `GEOPM_TRACE_SIGNALS=ENERGY_DRAM,POWER_DRAM`
+
+* `--geopm-agent` agent:
+  Specify the Agent to be used by all Controllers.  Available agents
+  are: "monitor" (default if option not specified), "power_balancer",
+  "power_governor", and "energy_efficient".  See
+  **geopm_agent_monitor(7)**, **geopm_agent_power_balancer(7)**,
+  **geopm_agent_power_governor(7)**, and **geopm_agent_energy_efficient(7)**
+  for descriptions of each agent.  This option is used by the launcher
+  to set the GEOPM_AGENT environment variable.  The command line option
+  will override any value currently set in the environment.  See the
+  ENVIRONMENT section of **geopm(7)**.
+
+* `--geopm-profile` name:
+  The name of the profile which is printed in the report and trace
+  files.  This name can be used to index the data in post-processing.
+  For example, when running a sweep of experiments with multiple power
+  caps, the profile could contain the power setting for one run.
+  This option is used by the launcher to set the GEOPM_PROFILE
+  environment variable.  The command line option will override any
+  value currently set in the environment.  See the ENVIRONMENT section
+  of **geopm(7)**.
+
+* `--geopm-plugin-path` path:
+  Enables GEOPM to search for plugins in places other than the default
+  location.  The option is a ":" separated list of directories to
+  search.  This option is used by the launcher to set the GEOPM_PLUGIN_PATH
+  environment variable.  The command line option will override any
+  value currently set in the environment.  See the ENVIRONMENT section
+  of **geopm(7)**.
+
+* `--geopm-debug-attach` rank:
+  Enables a serial debugger such as gdb to attach to a job when the
+  GEOPM PMPI wrappers are enabled.  If set to a numerical value the
+  associated rank will be trapped in MPI_Init() until a debugger is
+  attached and the local variable "cont" is set to a non-zero value.
+  If set, but not to a numerical value then all ranks are trapped.
+  The runtime will print a message explaining the hostname and process
+  ID that the debugger should attach to.  This option is used by the
+  launcher to set the GEOPM_DEBUG_ATTACH environment variable.  The
+  command line option will override any value currently set in the
+  environment.  See the ENVIRONMENT section of **geopm(7)**.
+
+* `--geopm-region-barrier`:
+  Enables a node local MPI_Barrier() at time of calling
+  `geopm_region_enter`() or `geopm_region_exit`() for all application
+  ranks that share a node.  Since the GEOPM controller only considers
+  a region to be entered when all ranks on a node have entered the
+  region, enabling this feature forces control throughout all of the
+  time every rank spends in a region.  This feature is primarily used
+  for debugging purposes.  WARNING: If all regions marked in the
+  application are not entered synchronously by all ranks on a node
+  then enabling this feature will cause a deadlock and the application
+  will hang.  This option is used by the launcher to set the
+  GEOPM_REGION_BARRIER environment variable.  The command line option
+  will override any value currently set in the environment.  See the
+  ENVIRONMENT section of **geopm(7)**.
+
+* `--geopm-preload`:
+  Use LD_PRELOAD to link libgeopm.so at runtime.  This can be used to
+  enable the GEOPM runtime when an application has not been compiled
+  against libgeopm.so.
+
+* `--geopm-disable-hyperthreads`:
+  Prevent the launcher from trying to use hyperthreads for pinning
+  purposes when attempting to satisfy the MPI ranks / OMP threads
+  configuration specified.  This is done for both the controller and
+  the application.  An error is raised if the launcher cannot satisfy
+  the current request without hyperthreads.
+
+## EXAMPLES
+Use geopmlaunch to queue a job using geopmbench on a SLURM managed system
+requesting two nodes using 32 application MPI process each with four threads:
+
+    geopmlaunch srun -N 2 -n 32 -c 4 --geopm-ctl=process \
+                                     --geopm-report=tutorial6.report \
+                                     -- ./geopmbench tutorial6_config.json
+
+Use geopmlaunch to launch the miniFE executable with the same configuration,
+but on an ALPS managed system:
+
+    geopmlaunch aprun -N 2 -n 64 --cpus-per-pe 4 \
+                                 --geopm-ctl process \
+                                 --geopm-report miniFE.report \
+                                 -- ./miniFE.x -nx 256 -ny 256 -nz 256
+
+## ENVIRONMENT
+Every command line option to the launcher can also be specified as an
+environment variable if desired (with the exception of `--geopm-ctl`).
+For example, instead of specifying `--geopm-region-barrier` one can instead
+set in the environment `GEOPM_REGION_BARRIER=true` prior to invoking the launcher
+script.  The environment variables are named the same as the command
+line option but have the hyphens replaced with underscores, and are
+all uppercase.  The command line options take precedence over the
+environment variables.
+
+The usage of `--geopm-ctl` here is slightly different than how the
+controller handles the `GEOPM_CTL` environment variable.  In the
+case of the launcher, one can specify _process_, _pthread_, or
+_application_ to the command line argument.  In the case of
+`GEOPM_CTL` one can ONLY specify `process` or `pthread`, as
+launching the controller as a separate application is handled through
+the `geopmctl` binary.
+
+## COPYRIGHT
+Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation. All rights reserved.
+
+## SEE ALSO
+**geopm(7)**,
+**geopmpy(7)**,
+**geopm_agent_energy_efficient(7)**,
+**geopm_agent_monitor(7)**,
+**geopm_agent_power_balancer(7)**,
+**geopm_agent_power_governor(7)**,
+**geopm_error(3)**,
+**geopmctl(1)**

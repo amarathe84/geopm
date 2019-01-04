@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -42,28 +42,28 @@ namespace geopm
     class ISharedMemory
     {
         public:
-            ISharedMemory() {}
-            ISharedMemory(const ISharedMemory &other) {}
-            virtual ~ISharedMemory() {}
+            ISharedMemory() = default;
+            ISharedMemory(const ISharedMemory &other) = default;
+            virtual ~ISharedMemory() = default;
             /// @brief Retrieve a pointer to the shared memory region.
             /// @return Void pointer to the shared memory region.
-            virtual void *pointer(void) = 0;
+            virtual void *pointer(void) const = 0;
             /// @brief Retrieve the key to the shared memory region.
             /// @return Key to the shared memory region.
-            virtual std::string key(void) = 0;
-            virtual size_t size(void) = 0;
+            virtual std::string key(void) const = 0;
+            virtual size_t size(void) const = 0;
     };
 
     /// @brief This class encapsulates attaching to inter-process shared memory.
     class ISharedMemoryUser
     {
         public:
-            ISharedMemoryUser() {}
-            ISharedMemoryUser(const ISharedMemoryUser &other) {}
-            virtual ~ISharedMemoryUser() {}
-            virtual void *pointer(void) = 0;
-            virtual std::string key(void) = 0;
-            virtual size_t size(void) = 0;
+            ISharedMemoryUser() = default;
+            ISharedMemoryUser(const ISharedMemoryUser &other) = default;
+            virtual ~ISharedMemoryUser() = default;
+            virtual void *pointer(void) const = 0;
+            virtual std::string key(void) const = 0;
+            virtual size_t size(void) const = 0;
             virtual void unlink(void) = 0;
     };
 
@@ -79,12 +79,12 @@ namespace geopm
             virtual ~SharedMemory();
             /// @brief Retrieve a pointer to the shared memory region.
             /// @return Void pointer to the shared memory region.
-            void *pointer(void);
+            void *pointer(void) const override;
             /// @brief Retrieve the key to the shared memory region.
             /// @return Key to the shared memory region.
-            std::string key(void);
-            size_t size(void);
-        protected:
+            std::string key(void) const override;
+            size_t size(void) const override;
+        private:
             /// @brief Shared memory key for the region.
             std::string m_shm_key;
             /// @brief Size of the region.
@@ -111,11 +111,11 @@ namespace geopm
             SharedMemoryUser(const std::string &shm_key);
             /// Destructor detaches from shared memory region.
             virtual ~SharedMemoryUser();
-            void *pointer(void);
-            std::string key(void);
-            size_t size(void);
-            void unlink(void);
-        protected:
+            void *pointer(void) const override;
+            std::string key(void) const override;
+            size_t size(void) const override;
+            void unlink(void) override;
+        private:
             /// Shared memory key for the region.
             std::string m_shm_key;
             /// Size of the region.

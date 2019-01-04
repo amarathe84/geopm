@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,18 +30,24 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifndef MOCKCOMM_HPP_INCLUDE
+#define MOCKCOMM_HPP_INCLUDE
+
 #include "Comm.hpp"
 
-class MockComm : public geopm::IComm {
+class MockComm : public geopm::Comm
+{
     public:
         MOCK_CONST_METHOD0(split,
-            IComm *(void));
+            std::shared_ptr<Comm> (void));
         MOCK_CONST_METHOD2(split,
-            IComm *(int color, int key));
+            std::shared_ptr<Comm> (int color, int key));
         MOCK_CONST_METHOD2(split,
-            IComm *(const std::string &tag, int split_type));
+            std::shared_ptr<Comm> (const std::string &tag, int split_type));
         MOCK_CONST_METHOD3(split,
-            IComm *(std::vector<int> dimensions, std::vector<int> periods, bool is_reorder));
+            std::shared_ptr<Comm> (std::vector<int> dimensions, std::vector<int> periods, bool is_reorder));
+        MOCK_CONST_METHOD1(split_cart,
+            std::shared_ptr<Comm>(std::vector<int> dimensions));
         MOCK_CONST_METHOD1(comm_supported,
             bool (const std::string &description));
         MOCK_CONST_METHOD1(cart_rank,
@@ -66,6 +72,8 @@ class MockComm : public geopm::IComm {
             void (size_t window_id, int rank));
         MOCK_CONST_METHOD2(coordinate,
             void (int rank, std::vector<int> &coord));
+        MOCK_CONST_METHOD1(coordinate,
+            std::vector<int>(int rank));
         MOCK_CONST_METHOD0(barrier,
             void (void));
         MOCK_CONST_METHOD3(broadcast,
@@ -82,4 +90,8 @@ class MockComm : public geopm::IComm {
                 const std::vector<size_t> &recv_sizes, const std::vector<off_t> &rank_offset, int root));
         MOCK_CONST_METHOD5(window_put,
             void (const void *send_buf, size_t send_size, int rank, off_t disp, size_t window_id));
+        MOCK_METHOD0(tear_down,
+            void (void));
 };
+
+#endif

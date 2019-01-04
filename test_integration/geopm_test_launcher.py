@@ -1,5 +1,5 @@
 #
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -38,16 +38,50 @@ import datetime
 import signal
 import StringIO
 import math
+import shlex
 
 import geopm_context
 import geopmpy.launcher
-from geopmpy.launcher import resource_manager
+
+
+def detect_launcher():
+    """
+    Heuristic to determine the resource manager used on the system.
+    Returns name of resource manager or launcher, otherwise a
+    LookupError is raised.
+    """
+    slurm_hosts = ['mr-fusion']
+    alps_hosts = ['theta']
+
+    result = None
+    hostname = socket.gethostname()
+
+    if any(hostname.startswith(word) for word in slurm_hosts):
+        result = 'srun'
+    elif any(hostname.startswith(word) for word in alps_hosts):
+        result = 'aprun'
+    else:
+        try:
+            exec_str = 'srun --version'
+            subprocess.check_call(exec_str, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, shell=True)
+            result = 'srun'
+        except subprocess.CalledProcessError:
+            try:
+                exec_str = 'aprun --version'
+                subprocess.check_call(exec_str, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, shell=True)
+                result = 'aprun'
+            except subprocess.CalledProcessError:
+                raise LookupError('Unable to determine resource manager')
+    return result
+
 
 class TestLauncher(object):
-    def __init__(self, app_conf, ctl_conf, report_path,
+    def __init__(self, app_conf, agent_conf, report_path=None,
                  trace_path=None, host_file=None, time_limit=600, region_barrier=False, performance=False):
         self._app_conf = app_conf
-        self._ctl_conf = ctl_conf
+        self._agent_conf = agent_conf
         self._report_path = report_path
         self._trace_path = trace_path
         self._host_file = host_file
@@ -78,33 +112,39 @@ class TestLauncher(object):
 
     def check_run(self, test_name):
         with open(test_name + '.log', 'a') as outfile:
-            argv = ['dummy', 'true']
+            argv = ['dummy', detect_launcher(), 'true']
             launcher = geopmpy.launcher.factory(argv, self._num_rank, self._num_node,
-                                              self._cpu_per_rank, self._timeout,
-                                              self._time_limit, self._job_name,
-                                              self._node_list, self._host_file)
+                                                self._cpu_per_rank, self._timeout,
+                                                self._time_limit, self._job_name,
+                                                self._node_list, self._host_file)
             launcher.run(stdout=outfile, stderr=outfile)
 
     def run(self, test_name):
         self._app_conf.write()
-        self._ctl_conf.write()
+        self._agent_conf.write()
         with open(test_name + '.log', 'a') as outfile:
             outfile.write(str(datetime.datetime.now()) + '\n')
             outfile.flush()
-            script_dir = os.path.dirname(os.path.realpath(__file__))
+            source_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
             # Using libtool causes sporadic issues with the Intel toolchain.
-            exec_path = os.path.join(script_dir, '.libs', 'geopm_test_integration')
-            argv = ['dummy', '--geopm-ctl', self._pmpi_ctl,
-                             '--geopm-policy', self._ctl_conf.get_path(),
-                             '--geopm-report', self._report_path,
-                             '--geopm-profile', test_name]
+            exec_path = os.path.join(source_dir, '.libs', 'geopmbench')
+            argv = ['dummy', detect_launcher(), '--geopm-ctl', self._pmpi_ctl,
+                                                '--geopm-agent', self._agent_conf.get_agent(),
+                                                '--geopm-policy', self._agent_conf.get_path(),
+                                                '--geopm-profile', test_name]
+            if self._report_path is not None:
+                argv.extend(['--geopm-report', self._report_path])
             if self._trace_path is not None:
                 argv.extend(['--geopm-trace', self._trace_path])
             if self._region_barrier:
-                argv.append('--geopm-barrier')
-            argv.extend(['--', exec_path, '--verbose', self._app_conf.get_path()])
+                argv.append('--geopm-region-barrier')
+            argv.extend(['--'])
+            exec_wrapper = os.getenv('GEOPM_EXEC_WRAPPER', '')
+            if exec_wrapper:
+                argv.extend(shlex.split(exec_wrapper))
+            argv.extend([exec_path, '--verbose', self._app_conf.get_path()])
             launcher = geopmpy.launcher.factory(argv, self._num_rank, self._num_node, self._cpu_per_rank, self._timeout,
-                                              self._time_limit, test_name, self._node_list, self._host_file)
+                                                self._time_limit, test_name, self._node_list, self._host_file)
             launcher.run(stdout=outfile, stderr=outfile)
 
     def get_report(self):
@@ -115,13 +155,13 @@ class TestLauncher(object):
 
     @staticmethod
     def get_idle_nodes():
-        argv = ['dummy', 'true']
+        argv = ['dummy', detect_launcher(), 'true']
         launcher = geopmpy.launcher.factory(argv, 1, 1)
         return launcher.get_idle_nodes()
 
     @staticmethod
     def get_alloc_nodes():
-        argv = ['dummy', 'true']
+        argv = ['dummy', detect_launcher(), 'true']
         launcher = geopmpy.launcher.factory(argv, 1, 1)
         return launcher.get_alloc_nodes()
 
@@ -133,7 +173,7 @@ class TestLauncher(object):
         # Figure out the number of CPUs per rank leaving one for the
         # OS and one (potentially, may/may not be use depending on pmpi_ctl)
         # for the controller.
-        argv = ['dummy', 'lscpu']
+        argv = ['dummy', detect_launcher(), 'lscpu']
         launcher = geopmpy.launcher.factory(argv, 1, 1)
         ostream = StringIO.StringIO()
         launcher.run(stdout=ostream)
@@ -153,7 +193,7 @@ class TestLauncher(object):
             # Mulitply num core per socket by num socket and remove one
             # CPU for BSP to calculate number of CPU for application.
             # Don't use hyper-threads.
-            self._num_cpu = cpu_thread_core_socket[0] * cpu_thread_core_socket[3] - 1
+            self._num_cpu = cpu_thread_core_socket[2] * cpu_thread_core_socket[3] - 1
 
     def set_cpu_per_rank(self):
         try:
@@ -161,4 +201,3 @@ class TestLauncher(object):
             self._cpu_per_rank = int(math.floor(self._num_cpu / rank_per_node))
         except (AttributeError, TypeError):
             pass
-

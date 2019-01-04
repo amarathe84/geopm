@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -62,7 +62,7 @@ namespace geopm
             void init(void) const;
             void check(void) const;
             void revert(void) const;
-        protected:
+        private:
             /// @brief All signals that terminate the process.
             std::vector<int> m_signals;
             std::vector<struct sigaction> m_old_action;

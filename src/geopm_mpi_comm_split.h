@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,8 +30,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef GEOPM_COMM_SPLIT_H_INCLUDE
-#define GEOPM_COMM_SPLIT_H_INCLUDE
+#ifndef GEOPM_MPI_COMM_SPLIT_H_INCLUDE
+#define GEOPM_MPI_COMM_SPLIT_H_INCLUDE
 
 #ifndef GEOPM_TEST
 #include <mpi.h>

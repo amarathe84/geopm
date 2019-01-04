@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,13 +33,17 @@
 #ifndef COMM_HPP_INCLUDE
 #define COMM_HPP_INCLUDE
 
+#include <memory>
 #include <vector>
 #include <string>
+#include <list>
 
 namespace geopm
 {
+    template <class T> class PluginFactory;
+
     /// @brief Abstract base class for interprocess communication in geopm
-    class IComm
+    class Comm
     {
         public:
             enum m_comm_split_type_e {
@@ -53,15 +57,17 @@ namespace geopm
             };
 
             /// @brief Constructor for global communicator
-            IComm() {}
-            IComm(const IComm *in_comm) {}
+            Comm() = default;
+            Comm(const Comm &in_comm) = default;
             /// @brief Default destructor
-            virtual ~IComm() {}
+            virtual ~Comm() = default;
 
-            virtual IComm* split() const = 0;
-            virtual IComm* split(int color, int key) const = 0;
-            virtual IComm* split(const std::string &tag, int split_type) const = 0;
-            virtual IComm* split(std::vector<int> dimensions, std::vector<int> periods, bool is_reorder) const = 0;
+            virtual std::shared_ptr<Comm> split() const = 0;
+            virtual std::shared_ptr<Comm> split(int color, int key) const = 0;
+            virtual std::shared_ptr<Comm> split(const std::string &tag, int split_type) const = 0;
+            virtual std::shared_ptr<Comm> split(std::vector<int> dimensions, std::vector<int> periods, bool is_reorder) const = 0;
+            virtual std::shared_ptr<Comm> split_cart(std::vector<int> dimensions) const = 0;
+
             virtual bool comm_supported(const std::string &description) const = 0;
 
             // Introspection
@@ -130,7 +136,7 @@ namespace geopm
             ///        The size of this vector should equal the number of dimensions
             ///        that the Cartesian communicator was created with.
             virtual void coordinate(int rank, std::vector<int> &coord) const = 0;
-
+            virtual std::vector<int> coordinate(int rank) const = 0;
             // Collective communication
             /// @brief Barrier for all ranks
             virtual void barrier(void) const = 0;
@@ -168,7 +174,7 @@ namespace geopm
             ///
             /// @param [in] root Rank of the target for the transmission.
             virtual void gather(const void *send_buf, size_t send_size, void *recv_buf,
-                    size_t recv_size, int root) const = 0;
+                                size_t recv_size, int root) const = 0;
             /// @brief Gather bytes into specified location from all processes
             ///
             /// @param [in] send_buf Start address of memory buffer to be trasnmitted.
@@ -183,7 +189,7 @@ namespace geopm
             ///
             /// @param [in] root Rank of the target for the transmission.
             virtual void gatherv(const void *send_buf, size_t send_size, void *recv_buf,
-                    const std::vector<size_t> &recv_sizes, const std::vector<off_t> &rank_offset, int root) const = 0;
+                                 const std::vector<size_t> &recv_sizes, const std::vector<off_t> &rank_offset, int root) const = 0;
             /// @brief Perform message passing or RMA.
             ///
             /// @param [in] send_buf Starting address of buffer to be transmitted via window.
@@ -196,11 +202,13 @@ namespace geopm
             ///
             /// @param [in] window_id The window handle for the target window.
             virtual void window_put(const void *send_buf, size_t send_size, int rank, off_t disp, size_t window_id) const = 0;
+            /// @brief Clean up resources held by the comm.  This
+            ///        allows static global objects to be cleaned up
+            ///        before the destructor is called.
+            virtual void tear_down(void) = 0;
     };
 
-    // User must not delete the returned instance from this call,
-    // but all IComms created from this instance must be memory managed by
-    const IComm* geopm_get_comm(const std::string &description);
+    PluginFactory<Comm>& comm_factory(void);
 }
 
 #endif

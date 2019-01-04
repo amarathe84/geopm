@@ -38,13 +38,21 @@
 
 #include "geopm_sched.h"
 #include "ProfileThread.hpp"
+#include "PlatformTopo.hpp"
 #include "Exception.hpp"
+
+#include "config.h"
 
 namespace geopm
 {
     ProfileThreadTable::ProfileThreadTable(size_t buffer_size, void *buffer)
+        : ProfileThreadTable(platform_topo(), buffer_size, buffer)
+    {
+    }
+
+    ProfileThreadTable::ProfileThreadTable(IPlatformTopo &topo, size_t buffer_size, void *buffer)
         : m_buffer((uint32_t *)buffer)
-        , m_num_cpu(geopm_sched_num_cpu())
+        , m_num_cpu(topo.num_domain(IPlatformTopo::M_DOMAIN_CPU))
         , m_stride(64 / sizeof(uint32_t))
     {
         if (buffer_size < 64 * m_num_cpu) {
@@ -58,11 +66,6 @@ namespace geopm
         , m_num_cpu(other.m_num_cpu)
         , m_stride(other.m_stride)
         , m_is_enabled(true)
-    {
-
-    }
-
-    ProfileThreadTable::~ProfileThreadTable()
     {
 
     }

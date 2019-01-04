@@ -1,5 +1,5 @@
 #
-#  Copyright (c) 2015, 2016, 2017, Intel Corporation
+#  Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -40,20 +40,35 @@ import argparse
 import cPickle as pickle
 import math
 from pkg_resources import parse_version
-import pandas
-
-if parse_version(pandas.__version__) < parse_version('0.19.2'):
-    raise ImportError('Pandas version must be >= v0.19.2!')
 
 import numpy
 import code
+
+try:
+    with open(os.devnull, 'w') as FNULL:
+        subprocess.check_call("python -c 'import matplotlib.pyplot'", stdout=FNULL, stderr=FNULL, shell=True)
+except subprocess.CalledProcessError:
+    sys.stderr.write('Warning: Unable to use default matplotlib backend ({}).  For interactive plotting,'
+                     ' please install Tkinter support in the OS.  '
+                     'For more information see: https://matplotlib.org/faq/usage_faq.html#what-is-a-backend\n'
+                     'Trying Agg...\n\n'
+                     .format(os.getenv('MPLBACKEND', 'TkAgg')))
+    import matplotlib
+    matplotlib.use('Agg')
+
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
+
+import pandas
+if parse_version(pandas.__version__) < parse_version('0.19.2'):
+    raise ImportError('Pandas version must be >= v0.19.2!')
+
 from natsort import natsorted
 from cycler import cycler
 
 from geopmpy import __version__
 import geopmpy.io
+
 
 class Config(object):
     """The base class for plot configuration objects.
@@ -84,7 +99,7 @@ class Config(object):
         show: A bool to display an interactive plot if true.
         shell: A bool to drops to a Python shell for further analysis if true.
     """
-    def __init__(self, profile_name='Default', misc_text = '', datatype=None, normalize=False,
+    def __init__(self, profile_name='Default', misc_text='', datatype=None, normalize=False,
                  output_dir='figures', write_csv=False, output_types=['svg'], verbose=False,
                  style='classic', fig_size=None, fontsize=None, legend_fontsize=None, show=False, shell=False,
                  min_drop=0, max_drop=999,
@@ -99,6 +114,7 @@ class Config(object):
         self.write_csv = write_csv
         self.output_types = output_types
         self.verbose = verbose
+        self.use_agent = False
 
         # Indexing params
         self.min_drop = min_drop
@@ -121,7 +137,7 @@ class Config(object):
             os.makedirs(self.output_dir)
 
         if self.show:
-            self.block=True
+            self.block = True
 
         if self.shell:
             self.block = False
@@ -137,7 +153,10 @@ class Config(object):
         if tgt_plugin is None:
             tgt_plugin = self.tgt_plugin
 
-        decider_list = df.index.get_level_values('tree_decider').unique().tolist()
+        if self.use_agent:
+            decider_list = df.index.get_level_values('agent').unique().tolist()
+        else:
+            decider_list = df.index.get_level_values('tree_decider').unique().tolist()
         if ref_plugin is not None and ref_plugin not in decider_list:
             raise LookupError('Reference plugin {} not found in dataframe!'.format(ref_plugin))
         if tgt_plugin is not None and tgt_plugin not in decider_list:
@@ -160,17 +179,19 @@ class ReportConfig(Config):
         **kwargs: Arbitrary additional overrides for the Config object.
         units: The keys are report datatypes and the values are the Y-axis label.
     """
-    def __init__(self, speedup=False, yspan = 0.35,                                        # New args for this class
-                 datatype='runtime', fig_size=(6.3, 4.8), fontsize=14, legend_fontsize=14, # Base class args to override
-                 **kwargs):                                                                # User overridden args
+    def __init__(self, speedup=False, yspan=0.35,                                           # New args for this class
+                 datatype='runtime', fig_size=(6.3, 4.8), fontsize=14, legend_fontsize=14,  # Base class args to override
+                 **kwargs):                                                                 # User overridden args
         super(ReportConfig, self).__init__(datatype=datatype, fig_size=fig_size, fontsize=fontsize,
                                            legend_fontsize=legend_fontsize, **kwargs)
         self.speedup = speedup
         self.yspan = yspan
         self.units = {
             'energy': 'J',
+            'energy_pkg': 'J',
             'runtime': 's',
             'frequency': '% of sticker',
+            'power': 'W',
         }
 
 
@@ -190,10 +211,10 @@ class TraceConfig(Config):
         legend_fontsize: The size of the font in the legend.
         **kwargs: Arbitrary additional overrides for the Config object.
     """
-    def __init__(self, legend_label_spacing = 0.15, smooth=1, analyze=False, base_clock=None, # New args for this class
-                 focus_node=None,                                                             # New args for this class
-                 fig_size=(7, 6), fontsize=16, legend_fontsize=9,                             # Base class args to override
-                 **kwargs):                                                                   # User overridden args
+    def __init__(self, legend_label_spacing=0.15, smooth=1, analyze=False, base_clock=None,  # New args for this class
+                 focus_node=None, epoch_only=False,                                          # New args for this class
+                 fig_size=(7, 6), fontsize=16, legend_fontsize=9,                            # Base class args to override
+                 **kwargs):                                                                  # User overridden args
         super(TraceConfig, self).__init__(fig_size=fig_size, fontsize=fontsize, legend_fontsize=legend_fontsize,
                                           **kwargs)
         self.legend_label_spacing = legend_label_spacing
@@ -201,6 +222,7 @@ class TraceConfig(Config):
         self.analyze = analyze
         self.base_clock = base_clock
         self.focus_node = focus_node
+        self.epoch_only = epoch_only
 
         plt.rcParams.update({'legend.labelspacing': self.legend_label_spacing})
 
@@ -247,8 +269,10 @@ def generate_box_plot(report_df, config):
                                              config.datatype].groupby(level='power_budget').mean().min()
 
     # Select only the data we care about
-    report_df = report_df.loc[idx[config.tgt_version:config.tgt_version, config.tgt_profile_name:config.tgt_profile_name,
-                                config.min_drop:config.max_drop, config.tgt_plugin:config.tgt_plugin],]
+    report_df = report_df.loc[idx[config.tgt_version:config.tgt_version,
+                                  config.tgt_profile_name:config.tgt_profile_name,
+                                  config.min_drop:config.max_drop,
+                                  config.tgt_plugin:config.tgt_plugin], ]
 
     for decider, decider_df in report_df.groupby(level='tree_decider'):
         f, ax = plt.subplots()
@@ -335,24 +359,34 @@ def generate_bar_plot(report_df, config):
     idx = pandas.IndexSlice
     df = pandas.DataFrame()
 
-    reference_g = report_df.loc[idx[config.ref_version:config.ref_version, config.ref_profile_name:config.ref_profile_name,
-                                    config.min_drop:config.max_drop, config.ref_plugin, :, :, :, 'epoch'],
-                                config.datatype].groupby(level='power_budget')
+    if config.use_agent:
+        reference_g = report_df.loc[idx[config.ref_version:config.ref_version, :,
+                                    :, :, :, config.ref_plugin, :, :, 'epoch'],
+                                    config.datatype].groupby(level='name')
+    else:
+        reference_g = report_df.loc[idx[config.ref_version:config.ref_version, config.ref_profile_name:config.ref_profile_name,
+                                    config.min_drop:config.max_drop, config.ref_plugin, :, :, :, :, 'epoch'],
+                                    config.datatype].groupby(level='power_budget')
     df['reference_mean'] = reference_g.mean()
     df['reference_max'] = reference_g.max()
     df['reference_min'] = reference_g.min()
 
-    target_g = report_df.loc[idx[config.tgt_version:config.tgt_version, config.tgt_profile_name:config.tgt_profile_name,
-                                 config.min_drop:config.max_drop, config.tgt_plugin, :, :, :, 'epoch'],
-                             config.datatype].groupby(level='power_budget')
+    if config.use_agent:
+        target_g = report_df.loc[idx[config.tgt_version:config.tgt_version, :,
+                                 :, :, :, config.tgt_plugin, :, :, 'epoch'],
+                                 config.datatype].groupby(level='name')
+    else:
+        target_g = report_df.loc[idx[config.tgt_version:config.tgt_version, config.tgt_profile_name:config.tgt_profile_name,
+                                 config.min_drop:config.max_drop, config.tgt_plugin, :, :, :, :, 'epoch'],
+                                 config.datatype].groupby(level='power_budget')
     df['target_mean'] = target_g.mean()
     df['target_max'] = target_g.max()
     df['target_min'] = target_g.min()
 
-    if config.normalize and not config.speedup: # Normalize the data against the rightmost reference bar
+    if config.normalize and not config.speedup:  # Normalize the data against the rightmost reference bar
         df /= df['reference_mean'].iloc[-1]
 
-    if config.speedup: # Plot the inverse of the target data to show speedup as a positive change
+    if config.speedup:  # Plot the inverse of the target data to show speedup as a positive change
         df = df.div(df['reference_mean'], axis='rows')
         df['target_mean'] = 1 / df['target_mean']
         df['target_max'] = 1 / df['target_max']
@@ -394,7 +428,7 @@ def generate_bar_plot(report_df, config):
             color='cyan',
             align='center',
             label=config.tgt_plugin.replace('_', ' ').title(),
-            zorder=3) # Forces grid lines to be drawn behind the bar
+            zorder=3)  # Forces grid lines to be drawn behind the bar
 
     ax.errorbar(index + bar_width / 2,
                 df['target_mean'],
@@ -408,7 +442,8 @@ def generate_bar_plot(report_df, config):
                 zorder=10)
 
     ax.set_xticks(index)
-    ax.set_xticklabels(df.index)
+    xlabels = [tick.split('_')[-1] for tick in df.index]
+    ax.set_xticklabels(xlabels)
     ax.set_xlabel('Per-Node Socket+DRAM Power Limit (W)')
 
     ylabel = config.datatype.title()
@@ -417,7 +452,7 @@ def generate_bar_plot(report_df, config):
     elif not config.normalize and not config.speedup:
         units_label = config.units.get(config.datatype)
         ylabel = '{}{}'.format(ylabel, ' ({})'.format(units_label) if units_label else '')
-    else: #if config.speedup:
+    else:  # if config.speedup:
         ylabel = 'Normalized Speed-up'
     ax.set_ylabel(ylabel)
     ax.grid(axis='y', linestyle='--', color='black')
@@ -432,7 +467,7 @@ def generate_bar_plot(report_df, config):
         # Check yspan before setting to ensure span is > speedup
         abs_max_val = max(abs(df['target_mean'].max()), abs(df['target_mean'].min()))
         abs_max_val = abs(abs_max_val - 1)
-        if abs_max_val  > config.yspan:
+        if abs_max_val > config.yspan:
             yspan = abs_max_val * 1.1
         else:
             yspan = config.yspan
@@ -469,6 +504,307 @@ def generate_bar_plot(report_df, config):
     plt.close()
 
 
+# Same as above plot, but pandas logic has been moved to analysis.py
+# some cosmetic changes August 2018
+def generate_bar_plot_comparison(df, config):
+    # TODO: fix in analysis.py
+    if 'nekbone' in config.profile_name:
+        config.profile_name = config.profile_name.replace('nekbone', 'Nekbone')
+    elif 'dgemm' in config.profile_name:
+        config.profile_name = config.profile_name.replace('dgemm', 'DGEMM')
+    elif 'minife' in config.profile_name:
+        config.profile_name = config.profile_name.replace('minife', 'MiniFE')
+    elif 'amg' in config.profile_name:
+        config.profile_name = config.profile_name.replace('amg', 'AMG')
+
+    # Begin plot setup
+    f, ax = plt.subplots()
+    bar_width = 0.35
+    index = numpy.arange(min(len(df['target_mean']), len(df['reference_mean'])))
+
+    plt.bar(index - bar_width / 2,
+            df['reference_mean'],
+            width=bar_width,
+            color='blue',
+            align='center',
+            label=config.ref_plugin.replace('_', ' ').title(),
+            zorder=3)
+
+    ax.errorbar(index - bar_width / 2,
+                df['reference_mean'],
+                xerr=None,
+                yerr=(df['reference_min_delta'], df['reference_max_delta']),
+                fmt=' ',
+                label='',
+                color='r',
+                elinewidth=2,
+                capthick=2,
+                zorder=10)
+
+    plt.bar(index + bar_width / 2,
+            df['target_mean'],
+            width=bar_width,
+            color='cyan',
+            align='center',
+            label=config.tgt_plugin.replace('_', ' ').title(),
+            zorder=3)  # Forces grid lines to be drawn behind the bar
+
+    ax.errorbar(index + bar_width / 2,
+                df['target_mean'],
+                xerr=None,
+                yerr=(df['target_min_delta'], df['target_max_delta']),
+                fmt=' ',
+                label='',
+                color='r',
+                elinewidth=2,
+                capthick=2,
+                zorder=10)
+
+    ax.set_xticks(index)
+    xlabels = df.index
+    ax.set_xticklabels(xlabels)
+    ax.set_xlabel('Average Node Power Limit (W)')
+
+    if config.datatype == 'energy_pkg':
+        title_datatype = 'Energy'
+    else:
+        title_datatype = config.datatype.title()
+
+    ylabel = title_datatype
+    if config.normalize and not config.speedup:
+        ylabel = 'Normalized {}'.format(ylabel)
+    elif not config.normalize and not config.speedup:
+        units_label = config.units.get(config.datatype)
+        ylabel = '{}{}'.format(ylabel, ' ({})'.format(units_label) if units_label else '')
+    else:  # if config.speedup:
+        ylabel = 'Normalized Speed-up'
+    ax.set_ylabel(ylabel)
+
+    ax.grid(axis='y', linestyle='--', color='black')
+
+    plt.title('{}: {} Decreases from Power Balancing{}'.format(config.profile_name, title_datatype, config.misc_text), y=1.02)
+
+    plt.margins(0.02, 0.01)
+    plt.axis('tight')
+    plt.legend(shadow=True, fancybox=True, fontsize=config.legend_fontsize, loc='best').set_zorder(11)
+    plt.tight_layout()
+
+    if config.speedup:
+        # Check yspan before setting to ensure span is > speedup
+        abs_max_val = max(abs(df['target_mean'].max()), abs(df['target_mean'].min()))
+        abs_max_val = abs(abs_max_val - 1)
+        if abs_max_val > config.yspan:
+            yspan = abs_max_val * 1.1
+        else:
+            yspan = config.yspan
+        ax.set_ylim(1 - yspan, 1 + yspan)
+    else:
+        ymax = ax.get_ylim()[1]
+        ymax *= 1.1
+        ax.set_ylim(0, ymax)
+
+    # Write data/plot files
+    file_name = '{}_{}_comparison'.format(config.profile_name.lower().replace(' ', '_'), config.datatype)
+    if config.speedup:
+        file_name += '_speedup'
+    elif config.normalize:
+        file_name += '_normalized'
+    if config.verbose:
+        sys.stdout.write('Writing:\n')
+    if config.write_csv:
+        full_path = os.path.join(config.output_dir, '{}.csv'.format(file_name))
+        df.T.to_csv(full_path)
+        if config.verbose:
+            sys.stdout.write('    {}\n'.format(full_path))
+    for ext in config.output_types:
+        full_path = os.path.join(config.output_dir, '{}.{}'.format(file_name, ext))
+        plt.savefig(full_path)
+        if config.verbose:
+            sys.stdout.write('    {}\n'.format(full_path))
+    sys.stdout.flush()
+
+    if config.show:
+        plt.show(block=config.block)
+
+    if config.shell:
+        code.interact(local=dict(globals(), **locals()))
+
+    plt.close()
+
+
+# TODO: this can be combined with above bar plot function once analysis code is
+# moved to analysis.py
+def generate_bar_plot_sc17(data, name, output_dir):
+    """
+    Creates a plot comparing the energy savings or runtime increase of different
+    energy efficiency plugin modes.
+    """
+    f, ax = plt.subplots()
+
+    cols = data.columns
+    colors = ['gray', 'blue', 'orange', 'green', 'red']  # todo: change to map
+    assert len(colors) >= len(cols)
+    num_series = len(cols)
+    bar_width = 0.7 / num_series
+
+    index = numpy.arange(len(data))
+
+    # centering for multiple bars
+    start_shift = -(num_series-1)/2.0*bar_width
+    for i in range(num_series):
+        shift = start_shift + (i * bar_width)
+        ax.bar(index + shift,
+               data[cols[i]],
+               width=bar_width,
+               color=colors[i],
+               align='center',
+               label=cols[i],
+               zorder=3)
+
+    ax.set_xticks(index)
+    ax.set_xticklabels(data.index)
+    ax.set_xlabel('stream fraction')
+
+    ax.set_ylabel(name)
+    ax.grid(axis='y', linestyle='--', color='black')
+
+    plt.margins(0.02, 0.01)
+
+    plt.legend(shadow=True, fancybox=True, fontsize=14, loc='best').set_zorder(11)
+    plt.title(name)
+
+    f.tight_layout()
+    plt.savefig(os.path.join(output_dir, '{}_bar.png'.format(name.replace(' ', '_'))))
+    plt.close()
+
+
+# TODO: generate application best frequency plot (bar with 2 horz lines)
+
+
+# TODO: move to generic floating box plot
+def generate_best_freq_plot_sc17(data, name, output_dir):
+    """
+    Creates a plot showing the frequencies chosen by the adaptive online algorithm.
+    """
+    f, ax = plt.subplots()
+
+    cols = data.columns
+    colors = ['blue', 'orange', 'green', 'red']  # todo: change to map
+    assert len(colors) >= len(cols)
+    num_series = len(cols)
+    bar_width = 0.7 / num_series
+
+    index = numpy.arange(len(data))
+
+    # centering for multiple bars
+    start_shift = -(num_series-1)/2.0*bar_width
+    for i in range(num_series):
+        shift = start_shift + (i * bar_width)
+        series_data = data[cols[i]]
+        bottom, top = zip(*series_data)
+        bottom = numpy.asarray(bottom)
+        top = numpy.asarray(top)
+        top = (top - bottom) + 5e6
+        ax.bar(index + shift,
+               top,
+               bottom=bottom,
+               width=bar_width,
+               color=colors[i],
+               align='center',
+               label=cols[i],
+               zorder=3)
+
+    ax.set_xlabel('stream fraction')
+    ax.set_ylabel('Frequency (Hz)')
+    ax.set_ylim([1.1e9, 2.3e9])
+
+    lines, labels = ax.get_legend_handles_labels()
+    plt.legend(lines, labels, shadow=True, fancybox=True, loc='best')
+    plt.title(name)
+
+    f.tight_layout()
+    plt.savefig(os.path.join(output_dir, '{}.{}'.format(name.replace(' ', '_'), 'png')))
+    plt.close()
+
+
+def generate_app_best_freq_plot_sc17(data, name, output_dir):
+    f, ax = plt.subplots()
+
+    cols = data.columns
+    bar_width = 0.7
+
+    index = numpy.arange(len(data))
+
+    series_data = data['epoch']
+    print series_data
+    ax.bar(index,
+           series_data,
+           width=bar_width,
+           color='gray',
+           align='center',
+           label='offline auto application best-fit',
+           zorder=3)
+
+    try:
+        line_data = data['dgemm']
+    except KeyError:
+        line_data = data['tutorial_dgemm']
+    ax.plot(index,
+            line_data,
+            color='orange',
+            label='dgemm best-fit',
+            linestyle='--',
+            zorder=3)
+
+    try:
+        line_data = data['stream']
+    except KeyError:
+        line_data = data['tutorial_stream']
+    ax.plot(index,
+            line_data,
+            color='blue',
+            label='stream best-fit',
+            linestyle='--',
+            zorder=3)
+
+    ax.set_xlabel('stream fraction')
+    ax.set_ylabel('Frequency (Hz)')
+
+    ax.set_ylim([1.1e9, 2.4e9])
+
+    lines, labels = ax.get_legend_handles_labels()
+    plt.legend(lines, labels, shadow=True, fancybox=True, loc='best')
+    plt.title(name)
+
+    f.tight_layout()
+    plt.savefig(os.path.join(output_dir, '{}.{}'.format(name.replace(' ', '_'), 'png')))
+    plt.close()
+
+
+def generate_runtime_energy_plot(df, name, output_dir='.'):
+    """
+    Creates a plot comparing the runtime and energy of a region on two axes.
+    """
+    f, ax = plt.subplots()
+
+    ax.plot(df.index, df['energy_pkg'], color='DarkBlue', label='Energy', marker='o', linestyle='-')
+    ax.set_xlabel('Frequency (GHz)')
+    ax.set_ylabel('Energy (J)')
+
+    ax2 = ax.twinx()
+    ax2.plot(df.index, df['runtime'], color='Red', label='Runtime', marker='s', linestyle='-')
+    ax2.set_ylabel('Runtime (s)')
+
+    lines, labels = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+
+    plt.legend(lines + lines2, labels + labels2, shadow=True, fancybox=True, loc='best')
+    plt.title('{}'.format(name))
+    f.tight_layout()
+    plt.savefig(os.path.join(output_dir, '{}_freq_energy.{}'.format(name.replace(' ', '_'), 'png')))
+    plt.close()
+
+
 def generate_power_plot(trace_df, config):
     """Plots the power consumed per node at each sample.
 
@@ -495,8 +831,10 @@ def generate_power_plot(trace_df, config):
     if config.verbose:
         sys.stdout.write('Filtering data...\n')
         sys.stdout.flush()
-    trace_df = trace_df.loc[idx[config.tgt_version:config.tgt_version, config.tgt_profile_name:config.tgt_profile_name,
-                                config.min_drop:config.max_drop, config.tgt_plugin:config.tgt_plugin],]
+    trace_df = trace_df.loc[idx[config.tgt_version:config.tgt_version,
+                                config.tgt_profile_name:config.tgt_profile_name,
+                                config.min_drop:config.max_drop,
+                                config.tgt_plugin:config.tgt_plugin], ]
 
     if len(trace_df) == 0:
         raise LookupError('No data remains after filtering.  Please check your datasets and filtering options.')
@@ -506,8 +844,8 @@ def generate_power_plot(trace_df, config):
     if config.verbose:
         sys.stdout.write('Grouping data...\n')
         sys.stdout.flush()
-    for (version, name, power_budget, tree_decider, leaf_decider), df in \
-        trace_df.groupby(level=['version', 'name', 'power_budget', 'tree_decider', 'leaf_decider']):
+    for (version, name, power_budget, tree_decider, leaf_decider, agent), df in \
+            trace_df.groupby(level=['version', 'name', 'power_budget', 'tree_decider', 'leaf_decider', 'agent']):
 
         # Diff the energy counters and determine the median iteration (if multiple runs)
         median_df = geopmpy.io.Trace.get_median_df(df, 'energy', config)
@@ -516,7 +854,7 @@ def generate_power_plot(trace_df, config):
         dram_energy_cols = [s for s in median_df.keys() if 'dram_energy' in s]
         median_df['socket_power'] = median_df[pkg_energy_cols].sum(axis=1) / median_df['elapsed_time']
         median_df['dram_power'] = median_df[dram_energy_cols].sum(axis=1) / median_df['elapsed_time']
-        median_df['combined_power'] = median_df['socket_power'] + median_df['dram_power']
+        median_df['combined_power'] = median_df['socket_power']
 
         # Begin plot setup
         node_names = df.index.get_level_values('node_name').unique().tolist()
@@ -526,7 +864,7 @@ def generate_power_plot(trace_df, config):
         f, ax = plt.subplots()
 
         for node_name in natsorted(node_names):
-            node_df = median_df.loc[idx[:, :, :, :, :, node_name],]
+            node_df = median_df.loc[idx[:, :, :, :, :, :, node_name], ]
 
             if node_name == config.focus_node:
                 plt.plot(pandas.Series(numpy.arange(float(len(node_df))) / (len(node_df) - 1) * 100),
@@ -558,16 +896,19 @@ def generate_power_plot(trace_df, config):
 
         plt.title('{} Iteration Power\n@ {}W{}'.format(config.profile_name, power_budget, config.misc_text), y=1.02)
 
-        legend = plt.legend(loc="lower center", bbox_to_anchor=[0.5,0], ncol=4,
-                            shadow=True, fancybox=True, fontsize=config.legend_fontsize)
-        for l in legend.legendHandles:
-            l.set_linewidth(2.0)
-        legend.set_zorder(11)
+        if len(node_names) <= 20:
+            legend = plt.legend(loc="lower center", bbox_to_anchor=[0.5, 0], ncol=4,
+                                shadow=True, fancybox=True, fontsize=config.legend_fontsize)
+            for l in legend.legendHandles:
+                l.set_linewidth(2.0)
+            legend.set_zorder(11)
         plt.tight_layout()
         ax.set_ylim(ax.get_ylim()[0] * .93, ax.get_ylim()[1])
 
         # Write data/plot files
-        file_name = '{}_power_{}_{}'.format(config.profile_name.lower().replace(' ', '_'), power_budget, tree_decider)
+        region_desc = 'epoch_only' if config.epoch_only else 'all_samples'
+        file_name = '{}_combined_power_{}_{}'.format(config.profile_name.lower().replace(' ', '_'), power_budget,
+                                                     tree_decider, region_desc)
         if config.verbose:
             sys.stdout.write('Writing:\n')
 
@@ -650,7 +991,7 @@ def generate_epoch_plot(trace_df, config):
         sys.stdout.write('Filtering data...\n')
         sys.stdout.flush()
     trace_df = trace_df.loc[idx[config.ref_version:config.tgt_version, config.ref_profile_name:config.tgt_profile_name,
-                                config.min_drop:config.max_drop],]
+                                config.min_drop:config.max_drop], ]
 
     if len(trace_df) == 0:
         raise LookupError('No data remains after filtering.  Please check your datasets and filtering options.')
@@ -661,12 +1002,12 @@ def generate_epoch_plot(trace_df, config):
         sys.stdout.flush()
     for (version, name, power_budget), df in trace_df.groupby(level=['version', 'name', 'power_budget']):
         reference_df = df.loc[idx[config.ref_version:config.ref_version, config.ref_profile_name:config.ref_profile_name,
-                                  :, ref_plugin],]
+                                  :, ref_plugin], ]
         reference_median_df = geopmpy.io.Trace.get_median_df(reference_df, ' ', config)
         reference_max_time_df = reference_median_df.unstack(level=['node_name']).max(axis=1)
 
         target_df = df.loc[idx[config.tgt_version:config.tgt_version, config.tgt_profile_name:config.tgt_profile_name,
-                               :, tgt_plugin],]
+                               :, tgt_plugin], ]
         target_median_df = geopmpy.io.Trace.get_median_df(target_df, ' ', config)
         target_max_time_df = target_median_df.unstack(level=['node_name']).max(axis=1)
 
@@ -682,7 +1023,7 @@ def generate_epoch_plot(trace_df, config):
                  color='blue',
                  linewidth=1.5)
 
-        if ref_plugin != tgt_plugin: # Do not plot the second line if there is no second plugin
+        if ref_plugin != tgt_plugin:  # Do not plot the second line if there is no second plugin
             plt.plot(numpy.arange(float(len(target_max_time_df))) / len(target_max_time_df) * 100,
                      target_max_time_df.rolling(window=config.smooth, center=True).mean(),
                      label=tgt_plugin.replace('_', ' ').title(),
@@ -707,12 +1048,14 @@ def generate_epoch_plot(trace_df, config):
             # Set the ylim from 90% of the 25th percentile to 110% of the 75th percentile
             lower_ylim = min(target_max_time_df.quantile(.25), reference_max_time_df.quantile(.25))
             lower_ylim *= 0.9
-            upper_ylim =  max(target_max_time_df.quantile(.75), reference_max_time_df.quantile(.75))
+            upper_ylim = max(target_max_time_df.quantile(.75), reference_max_time_df.quantile(.75))
             upper_ylim *= 1.1
             ax.set_ylim(lower_ylim, upper_ylim)
 
         # Write data/plot files
-        file_name = '{}_iteration_loop_time_{}'.format(config.profile_name.lower().replace(' ', '_'), power_budget)
+        region_desc = 'epoch_only' if config.epoch_only else 'all_samples'
+        file_name = '{}_iteration_loop_time_{}_{}'.format(config.profile_name.lower().replace(' ', '_'),
+                                                          power_budget, region_desc)
         if config.verbose:
             sys.stdout.write('Writing:\n')
 
@@ -730,11 +1073,11 @@ def generate_epoch_plot(trace_df, config):
             full_path = os.path.join(config.output_dir, '{}_stats.txt'.format(file_name))
             with open(full_path, 'w') as fd:
                 fd.write('Reference ({}) time statistics -\n\n{}'.format(ref_plugin,
-                        reference_median_df.unstack(level=['node_name']).describe()))
+                         reference_median_df.unstack(level=['node_name']).describe()))
                 fd.write('\n\nReference ({}) Aggregate (max) time statistics -\n\n{}'.format(ref_plugin,
-                        reference_median_df.unstack(level=['node_name']).mean(axis=1).describe()))
+                         reference_median_df.unstack(level=['node_name']).mean(axis=1).describe()))
                 fd.write('\n\nTarget ({}) time statistics -\n\n{}'.format(tgt_plugin,
-                        target_median_df.unstack(level=['node_name']).describe()))
+                         target_median_df.unstack(level=['node_name']).describe()))
                 fd.write('\n\nTarget ({}) Aggregate (max) time statistics -\n\n{}'.format(tgt_plugin,
                          target_median_df.unstack(level=['node_name']).mean(axis=1).describe()))
             if config.verbose:
@@ -784,8 +1127,10 @@ def generate_freq_plot(trace_df, config):
     if config.verbose:
         sys.stdout.write('Filtering data...\n')
         sys.stdout.flush()
-    trace_df = trace_df.loc[idx[config.tgt_version:config.tgt_version, config.tgt_profile_name:config.tgt_profile_name,
-                                config.min_drop:config.max_drop, config.tgt_plugin:config.tgt_plugin],]
+    trace_df = trace_df.loc[idx[config.tgt_version:config.tgt_version,
+                                config.tgt_profile_name:config.tgt_profile_name,
+                                config.min_drop:config.max_drop,
+                                config.tgt_plugin:config.tgt_plugin], ]
 
     if len(trace_df) == 0:
         raise LookupError('No data remains after filtering.  Please check your datasets and filtering options.')
@@ -794,7 +1139,7 @@ def generate_freq_plot(trace_df, config):
         sys.stdout.write('Grouping data...\n')
         sys.stdout.flush()
     for (version, name, power_budget, tree_decider, leaf_decider), df in \
-        trace_df.groupby(level=['version', 'name', 'power_budget', 'tree_decider', 'leaf_decider']):
+            trace_df.groupby(level=['version', 'name', 'power_budget', 'tree_decider', 'leaf_decider']):
         # Get the diffed CLK counters, then determine the median iteration (if multiple runs)
         median_df = geopmpy.io.Trace.get_median_df(df, 'clk', config)
 
@@ -808,15 +1153,15 @@ def generate_freq_plot(trace_df, config):
         clk_unhalted_core_cols = [s for s in median_df.keys() if 'clk_unhalted_core' in s]
         clk_unhalted_ref_cols = [s for s in median_df.keys() if 'clk_unhalted_ref' in s]
 
-        for c, r in zip(clk_unhalted_core_cols, clk_unhalted_ref_cols): # Loop once per socket
+        for c, r in zip(clk_unhalted_core_cols, clk_unhalted_ref_cols):  # Loop once per socket
             frequency_data = median_df[c] / median_df[r]
             if config.base_clock:
                 frequency_data *= config.base_clock
             else:
-                frequency_data *= 100 # Convert from fraction of sticker to % of sticker
+                frequency_data *= 100  # Convert from fraction of sticker to % of sticker
 
             for node_name in natsorted(node_names):
-                node_data = frequency_data.loc[idx[:, :, :, :, :, node_name],]
+                node_data = frequency_data.loc[idx[:, :, :, :, :, node_name], ]
 
                 if node_name == config.focus_node:
                     plt.plot(pandas.Series(numpy.arange(float(len(node_data))) / (len(node_data) - 1) * 100),
@@ -841,7 +1186,7 @@ def generate_freq_plot(trace_df, config):
 
             plt.title('{} Iteration Frequency\n@ {}W{}'.format(config.profile_name, power_budget, config.misc_text), y=1.02)
 
-            legend = plt.legend(loc="lower center", bbox_to_anchor=[0.5,0], ncol=4,
+            legend = plt.legend(loc="lower center", bbox_to_anchor=[0.5, 0], ncol=4,
                                 shadow=True, fancybox=True, fontsize=config.legend_fontsize)
             for l in legend.legendHandles:
                 l.set_linewidth(2.0)
@@ -851,8 +1196,10 @@ def generate_freq_plot(trace_df, config):
             ax.set_ylim(0, ax.get_ylim()[1] * 1.1)
 
             # Write data/plot files
-            file_name = '{}_frequency_{}_{}_socket_{}'.format(config.profile_name.lower().replace(' ', '_'),
-                                                              power_budget, tree_decider, clk_unhalted_core_cols.index(c))
+            region_desc = 'epoch_only' if config.epoch_only else 'all_samples'
+            file_name = '{}_frequency_{}_{}_socket_{}_{}'.format(config.profile_name.lower().replace(' ', '_'),
+                                                                 power_budget, tree_decider,
+                                                                 clk_unhalted_core_cols.index(c), region_desc)
             if config.verbose:
                 sys.stdout.write('Writing:\n')
 
@@ -886,12 +1233,91 @@ def generate_freq_plot(trace_df, config):
             plt.close()
 
 
+def generate_histogram(data, config, label, bin_size, xprecision):
+    data = data[label]
+    config.fontsize = 12
+    config.fig_size = (8, 4)
+
+    # TODO: fix in analysis.py
+    if 'nekbone' in config.profile_name:
+        config.profile_name = config.profile_name.replace('nekbone', 'Nekbone')
+    elif 'dgemm' in config.profile_name:
+        config.profile_name = config.profile_name.replace('dgemm', 'DGEMM')
+    elif 'minife' in config.profile_name:
+        config.profile_name = config.profile_name.replace('minife', 'MiniFE')
+    elif 'amg' in config.profile_name:
+        config.profile_name = config.profile_name.replace('amg', 'AMG')
+
+    if label.lower() == 'power':
+        axis_units = 'W'
+        title_units = 'W'
+        range_factor = 1
+        title = '{}: Histogram of Power (No Capping)'.format(config.profile_name)
+        bar_color = 'red'
+    elif label.lower() == 'frequency':
+        axis_units = 'GHz'
+        title_units = 'MHz'
+        range_factor = 1000
+        title = '{} Histogram of Achieved Frequency'.format(config.profile_name)
+        bar_color = 'blue'
+    elif label.lower() == 'energy':
+        axis_units = 'J'
+        title_units = 'J'
+        range_factor = 1
+        title = '{} Histogram of Energy'.format(config.profile_name)
+        bar_color = 'cyan'
+    else:
+        raise RuntimeError("<geopmpy>: Unknown type for histogram: {}".format(label))
+
+    plt.figure(figsize=config.fig_size)
+    bins = [round(bb*bin_size, 3) for bb in range(int(config.min_drop/bin_size), int(config.max_drop/bin_size)+2)]
+    n, bins, patches = plt.hist(data, rwidth=0.8, bins=bins, color=bar_color)
+    for n, b in zip(n, bins):
+        plt.annotate(int(n) if int(n) != 0 else "", xy=(b+bin_size/2.0, n+2.5),
+                     horizontalalignment='center',
+                     fontsize=config.fontsize-4)
+    min_max_range = (max(data) - min(data)) * range_factor
+    mean = data.mean()
+
+    n = len(data)
+    trim_pct = 0.05
+    trimmed_data = data[int(n*trim_pct):n-int(trim_pct*n)]
+    trimmed_min_max = (max(trimmed_data) - min(trimmed_data)) * range_factor
+    plt.title('{}\nMin-max Var.: {} {}; {}% Min-max Var.: {} {}; Mean: {} {}'
+              .format(title, round(min_max_range, 3), title_units,
+                      int((trim_pct)*100), round(trimmed_min_max, 3), title_units,
+                      round(mean, 3), title_units),
+              fontsize=config.fontsize)
+    plt.xlabel('{} ({})'.format(label.title(), axis_units), fontsize=config.fontsize)
+    plt.ylabel('Node Count', fontsize=config.fontsize)
+    plt.xticks([b+bin_size/2.0 for b in bins],
+               [' [{start:.{prec}f}, {end:.{prec}f})'.format(start=b, end=b+bin_size, prec=xprecision) for b in bins],
+               rotation='vertical',
+               fontsize=config.fontsize-4)
+    _, ylabels = plt.yticks()
+    plt.setp(ylabels, fontsize=config.fontsize-4)
+
+    plt.margins(0.02, 0.2)
+    plt.axis('tight')
+
+    plt.tight_layout()
+    output_dir = 'figures'
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    filename = '{}_{}_histo'.format(config.profile_name.replace('@', '_').replace(' ', '_'), label)
+    # todo: could be a method
+    for ext in config.output_types:
+        full_path = os.path.join(config.output_dir, '{}.{}'.format(filename, ext))
+        plt.savefig(full_path)
+        if config.verbose:
+            sys.stdout.write('    {}\n'.format(full_path))
+    plt.close()
+
+
 def main(argv):
     report_plots = {'debug', 'box', 'bar'}
     trace_plots = {'debug', 'power', 'epoch', 'freq'}
-
-    _, os.environ['COLUMNS'] = subprocess.check_output(['stty', 'size']).split() # Ensures COLUMNS is set so text wraps
-    pandas.set_option('display.width', int(os.environ['COLUMNS']))               # Same tweak for Pandas
 
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -906,7 +1332,7 @@ def main(argv):
                         action='store', default='')
     parser.add_argument('-p', '--plot_types',
                         help='the type of plot to be generated. (e.g. {})'.format(','.join(report_plots | trace_plots)),
-                        action='store', default='bar', type=lambda s : s.split(','))
+                        action='store', default='bar', type=lambda s: s.split(','))
     parser.add_argument('-s', '--shell',
                         help='drop to a Python shell after plotting.',
                         action='store_true')
@@ -921,7 +1347,7 @@ def main(argv):
                         action='store', default='figures')
     parser.add_argument('-O', '--output_types',
                         help='the file type(s) for the plot file output (e.g. svg,png,eps).',
-                        action='store', default='svg', type=lambda s : s.split(','))
+                        action='store', default='svg', type=lambda s: s.split(','))
     parser.add_argument('-n', '--profile_name',
                         help='Name of the profile to be used in file names / plot titles.',
                         action='store')
@@ -974,6 +1400,9 @@ def main(argv):
     parser.add_argument('--focus_node',
                         help='Node to highlight in red during per-node plots.',
                         action='store', metavar='NODE_NAME')
+    parser.add_argument('--epoch_only',
+                        help='Only use the epoch region samples for plotting.',
+                        action='store_true')
     parser.add_argument('--show',
                         help='show an interactive plot of the data',
                         action='store_true')
@@ -998,15 +1427,15 @@ def main(argv):
         if not args.trace_base:
             trace_glob = all_traces_glob
         else:
-            trace_glob = args.trace_base + '*'
+            trace_glob = (args.trace_base + '*') if args.trace_base != 'None' else None
     else:
         trace_glob = None
 
-    report_df=None
-    trace_df=None
-    app_output=None
+    report_df = None
+    trace_df = None
+    app_output = None
 
-    if args.cache: # If you want the use the cache, only try to load what is needed.
+    if args.cache:  # If you want the use the cache, only try to load what is needed.
         if args.verbose:
             sys.stdout.write('Trying to load {} caches... '.format(args.cache))
             sys.stdout.flush()
@@ -1024,7 +1453,7 @@ def main(argv):
     # If we did NOT use the cache, parse based on the plot requested
     # If we DID use the cache but nothing was parsed above, build the cache from all the things.
     if report_df is None and trace_df is None:
-        if args.cache: # Parse everything, regardless of what was requested.
+        if args.cache:  # Parse everything, regardless of what was requested.
             app_output = geopmpy.io.AppOutput(all_reports_glob, all_traces_glob, args.data_path, args.verbose)
             # Save app_output in cache file
             if args.verbose:
@@ -1035,28 +1464,29 @@ def main(argv):
             if args.verbose:
                 sys.stdout.write('Done.\n')
                 sys.stdout.flush()
-        else: # Parse only what was requested.
+        else:  # Parse only what was requested.
             app_output = geopmpy.io.AppOutput(report_glob, trace_glob, args.data_path, args.verbose)
         report_df = app_output.get_report_df()
         trace_df = app_output.get_trace_df()
 
-    if report_plots.intersection(args.plot_types) and len(report_df) == 0:
+    if report_glob is not None and len(report_df) == 0:
         raise LookupError('No report data parsed.')
-    if trace_plots.intersection(args.plot_types) and len(trace_df) == 0:
+    if trace_glob is not None and len(trace_df) == 0:
         raise LookupError('No trace data parsed.')
 
     if args.profile_name:
         profile_name = args.profile_name
     else:
         if report_glob is not None:
-            profile_name_list = report_df.index.get_level_values('name').unique()
+            profile_name_list = report_df.index.get_level_values('name').unique().tolist()
         elif trace_glob is not None:
-            profile_name_list = trace_df.index.get_level_values('name').unique()
+            profile_name_list = trace_df.index.get_level_values('name').unique().tolist()
         else:
             raise LookupError('No glob pattern specified.')
 
-        if len(profile_name_list) > 1:
-            raise LookupError('Multiple profile names detected! Please provide the -n option to specify the profile name!')
+        if len(profile_name_list) > 1 and 'debug' not in args.plot_types:
+            raise LookupError('Multiple profile names detected! Please provide the -n option to specify the profile name!\n{}'\
+                              .format('\n'.join(profile_name_list)))
         profile_name = profile_name_list[0]
 
     report_config = ReportConfig(shell=args.shell, profile_name=profile_name, misc_text=args.misc_text,
@@ -1076,7 +1506,7 @@ def main(argv):
                                    ref_profile_name=args.ref_profile_name,
                                    ref_plugin=args.ref_plugin, tgt_version=args.tgt_version,
                                    tgt_profile_name=args.tgt_profile_name, tgt_plugin=args.tgt_plugin,
-                                   focus_node=args.focus_node, show=args.show)
+                                   focus_node=args.focus_node, epoch_only=args.epoch_only, show=args.show)
 
     for plot in args.plot_types:
         # This tries to create the name of the plot function based on what was parsed in args.plot_types.  If it exists in
@@ -1084,7 +1514,7 @@ def main(argv):
         plot_func_name = 'generate_{}_plot'.format(plot)
 
         if plot == 'debug':
-            banner='Report data in report_df; Trace data in trace_df.'
+            banner = 'Report data in report_df; Trace data in trace_df.'
             code.interact(banner=banner, local=dict(globals(), **locals()))
         elif plot_func_name not in globals():
             raise KeyError('Invalid plot type "{}"!  Valid plots are {}.'.format(plot, ', '.join(plots)))
@@ -1097,4 +1527,3 @@ def main(argv):
             if len(report_df) == 0:
                 raise LookupError('No data present for the requested report plot.')
             globals()[plot_func_name](report_df, report_config)
-

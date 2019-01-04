@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,238 +30,582 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <stdint.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sstream>
-#include <fstream>
+#include <list>
+#include <set>
+#include <memory>
 #include <string>
-#include <map>
+#include <algorithm>
+#include <cmath>
 #include "gtest/gtest.h"
+#include "gmock/gmock.h"
 
-#include "geopm_sched.h"
-#include "PlatformIO.hpp"
+#include "geopm_internal.h"
+#include "geopm_hash.h"
+#include "IOGroup.hpp"
+#include "MockIOGroup.hpp"
+#include "MockPlatformTopo.hpp"
 #include "PlatformIOInternal.hpp"
-#include "MSRIO.hpp"
+#include "PlatformTopo.hpp"
 #include "Exception.hpp"
+#include "Agg.hpp"
+#include "CombinedSignal.hpp"
+#include "geopm_test.hpp"
 
-class TestPlatformIO : public geopm::PlatformIO
+using geopm::IOGroup;
+using geopm::PlatformIO;
+using geopm::IPlatformIO;
+using geopm::IPlatformTopo;
+
+using ::testing::_;
+using ::testing::Return;
+using ::testing::SetArgReferee;
+
+class PlatformIOTestMockIOGroup : public MockIOGroup
 {
     public:
-        TestPlatformIO(int cpuid);
-        virtual ~TestPlatformIO();
+        void set_valid_signal_names(const std::set<std::string> &names) {
+            m_valid_signals = names;
+        }
+        void set_valid_control_names(const std::set<std::string> &names) {
+            m_valid_controls = names;
+        }
+        bool is_valid_signal(const std::string &signal_name) const override
+        {
+            return std::find(m_valid_signals.begin(),
+                             m_valid_signals.end(),
+                             signal_name) != m_valid_signals.end();
+        }
+        bool is_valid_control(const std::string &control_name) const override
+        {
+            return std::find(m_valid_controls.begin(),
+                             m_valid_controls.end(),
+                             control_name) != m_valid_controls.end();
+        }
+        std::set<std::string> signal_names(void) const override
+        {
+            return m_valid_signals;
+        }
+        std::set<std::string> control_names(void) const override
+        {
+            return m_valid_controls;
+        }
     protected:
-        int cpuid(void);
-
-        int m_cpuid;
+        std::set<std::string> m_valid_signals;
+        std::set<std::string> m_valid_controls;
 };
 
-class PlatformIOTest : public :: testing :: Test
+class PlatformIOTest : public ::testing::Test
 {
     protected:
         void SetUp();
-        void TearDown();
-
-        geopm::IPlatformIO *m_platform_io;
+        std::list<std::shared_ptr<PlatformIOTestMockIOGroup> > m_iogroup_ptr;
+        std::unique_ptr<PlatformIO> m_platio;
+        MockPlatformTopo m_topo;
+        const unsigned int M_NUM_CPU = 4;
 };
-
-namespace geopm
-{
-    class TestPlatformIOMSRIO : public MSRIO
-    {
-        public:
-            TestPlatformIOMSRIO();
-            virtual ~TestPlatformIOMSRIO();
-        protected:
-            void msr_path(int cpu_idx,
-                          bool is_fallback,
-                          std::string &path);
-            void msr_batch_path(std::string &path);
-
-            std::vector<std::string> m_test_dev_path;
-    };
-
-    TestPlatformIOMSRIO::TestPlatformIOMSRIO()
-    {
-        const size_t MAX_OFFSET = 4096;
-        int num_cpu = geopm_sched_num_cpu();
-        for (int cpu_idx = 0; cpu_idx < num_cpu; ++cpu_idx) {
-            std::ostringstream path;
-            path << "test_msrio_dev_cpu_" << cpu_idx << "_msr_safe";
-            m_test_dev_path.push_back(path.str());
-        }
-
-        union field_u {
-            uint64_t field;
-            uint16_t off[4];
-        };
-        union field_u fu;
-        for (auto &path : m_test_dev_path) {
-            int fd = open(path.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-            int err = ftruncate(fd, MAX_OFFSET);
-            if (err) {
-                throw Exception("TestMSRIO: ftruncate failed", GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
-            }
-            uint64_t *contents = (uint64_t *)mmap(NULL, MAX_OFFSET, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-            close(fd);
-            size_t num_field = MAX_OFFSET / sizeof(uint64_t);
-            for (size_t field_idx = 0; field_idx < num_field; ++field_idx) {
-                uint16_t offset = field_idx * sizeof(uint64_t);
-                for (int off_idx = 0; off_idx < 4; ++off_idx) {
-                   fu.off[off_idx] = offset;
-                }
-                contents[field_idx] = fu.field;
-            }
-            munmap(contents, MAX_OFFSET);
-        }
-    }
-
-    TestPlatformIOMSRIO::~TestPlatformIOMSRIO()
-    {
-        for (auto &path : m_test_dev_path) {
-            unlink(path.c_str());
-        }
-    }
-
-    void TestPlatformIOMSRIO::msr_path(int cpu_idx,
-                             bool is_fallback,
-                             std::string &path)
-    {
-        path = m_test_dev_path[cpu_idx];
-    }
-
-    void TestPlatformIOMSRIO::msr_batch_path(std::string &path)
-    {
-        path = "test_dev_msr_safe";
-    }
-}
-
-
-TestPlatformIO::TestPlatformIO(int cpuid)
-    : m_cpuid(cpuid)
-{
-    m_msrio = new geopm::TestPlatformIOMSRIO;
-}
-
-TestPlatformIO::~TestPlatformIO()
-{
-
-}
-
-int TestPlatformIO::cpuid(void)
-{
-    return m_cpuid;
-}
 
 void PlatformIOTest::SetUp()
 {
-    m_platform_io = new TestPlatformIO(0x657); // KNL CPUID
+    std::list<std::shared_ptr<IOGroup> > iogroup_list;
+
+    // IOGroups for specific signals
+    // Not realistic, but easier to set expectations for testing
+    auto tmp = std::make_shared<PlatformIOTestMockIOGroup>();
+    iogroup_list.emplace_back(tmp);
+    m_iogroup_ptr.push_back(tmp);
+    tmp->set_valid_signal_names({"TIME"});
+    ON_CALL(*tmp, signal_domain_type("TIME"))
+        .WillByDefault(Return(IPlatformTopo::M_DOMAIN_BOARD));
+
+    tmp = std::make_shared<PlatformIOTestMockIOGroup>();
+    iogroup_list.emplace_back(tmp);
+    m_iogroup_ptr.push_back(tmp);
+    tmp->set_valid_signal_names({"ENERGY_PACKAGE"});
+    ON_CALL(*tmp, signal_domain_type("ENERGY_PACKAGE"))
+        .WillByDefault(Return(IPlatformTopo::M_DOMAIN_PACKAGE));
+
+    tmp = std::make_shared<PlatformIOTestMockIOGroup>();
+    iogroup_list.emplace_back(tmp);
+    m_iogroup_ptr.push_back(tmp);
+    tmp->set_valid_signal_names({"ENERGY_DRAM"});
+    ON_CALL(*tmp, signal_domain_type("ENERGY_DRAM"))
+        .WillByDefault(Return(IPlatformTopo::M_DOMAIN_BOARD_MEMORY));
+
+    tmp = std::make_shared<PlatformIOTestMockIOGroup>();
+    iogroup_list.emplace_back(tmp);
+    m_iogroup_ptr.push_back(tmp);
+    tmp->set_valid_signal_names({"REGION_ID#"});
+    ON_CALL(*tmp, signal_domain_type("REGION_ID#"))
+        .WillByDefault(Return(IPlatformTopo::M_DOMAIN_CPU));
+    ON_CALL(*tmp, agg_function("REGION_ID#"))
+        .WillByDefault(Return(geopm::Agg::region_id));
+
+    // IOGroups with signals and controls
+    tmp = std::make_shared<PlatformIOTestMockIOGroup>();
+    iogroup_list.emplace_back(tmp);
+    m_iogroup_ptr.push_back(tmp);
+    tmp->set_valid_signal_names({"FREQ", "MODE"});
+    tmp->set_valid_control_names({"FREQ", "MODE"});
+    ON_CALL(*tmp, signal_domain_type("FREQ"))
+        .WillByDefault(Return(IPlatformTopo::M_DOMAIN_CPU));
+    ON_CALL(*tmp, control_domain_type("FREQ"))
+        .WillByDefault(Return(IPlatformTopo::M_DOMAIN_CPU));
+    ON_CALL(*tmp, signal_domain_type("MODE"))
+        .WillByDefault(Return(IPlatformTopo::M_DOMAIN_PACKAGE));
+    ON_CALL(*tmp, control_domain_type("MODE"))
+        .WillByDefault(Return(IPlatformTopo::M_DOMAIN_PACKAGE));
+
+    // Group that overrides previous signals and controls
+    tmp = std::make_shared<PlatformIOTestMockIOGroup>();
+    iogroup_list.emplace_back(tmp);
+    m_iogroup_ptr.push_back(tmp);
+    tmp->set_valid_signal_names({"MODE"});
+    tmp->set_valid_control_names({"MODE"});
+    ON_CALL(*tmp, signal_domain_type("MODE"))
+        .WillByDefault(Return(IPlatformTopo::M_DOMAIN_BOARD));
+    ON_CALL(*tmp, control_domain_type("MODE"))
+        .WillByDefault(Return(IPlatformTopo::M_DOMAIN_BOARD));
+
+    // Settings for PlatformTopo: 1 socket 4 cpus
+    std::set<int> cpu_set = {0, 1, 2, 3};
+    ON_CALL(m_topo, is_domain_within(IPlatformTopo::M_DOMAIN_CPU, IPlatformTopo::M_DOMAIN_BOARD))
+        .WillByDefault(Return(true));
+    ON_CALL(m_topo, is_domain_within(IPlatformTopo::M_DOMAIN_CPU, IPlatformTopo::M_DOMAIN_BOARD_MEMORY))
+        .WillByDefault(Return(true));
+    ON_CALL(m_topo, is_domain_within(IPlatformTopo::M_DOMAIN_CPU, IPlatformTopo::M_DOMAIN_PACKAGE))
+        .WillByDefault(Return(true));
+    ON_CALL(m_topo, domain_cpus(IPlatformTopo::M_DOMAIN_BOARD, _))
+        .WillByDefault(Return(cpu_set));
+    ON_CALL(m_topo, domain_cpus(IPlatformTopo::M_DOMAIN_BOARD_MEMORY, _))
+        .WillByDefault(Return(cpu_set));
+    ON_CALL(m_topo, domain_cpus(IPlatformTopo::M_DOMAIN_PACKAGE, _))
+        .WillByDefault(Return(cpu_set));
+    ON_CALL(m_topo, domain_idx(IPlatformTopo::M_DOMAIN_CPU, _))
+        .WillByDefault(testing::ReturnArg<1>());
+
+    m_platio.reset(new PlatformIO(iogroup_list, m_topo));
 }
 
-void PlatformIOTest::TearDown()
+TEST_F(PlatformIOTest, signal_control_names)
 {
-    delete m_platform_io;
+    // IOGroup signals and PlatformIO signals
+    std::set<std::string> expected_signals {"TIME", "ENERGY_PACKAGE", "ENERGY_DRAM",
+            "REGION_ID#", "FREQ", "MODE", "POWER_PACKAGE", "POWER_DRAM"};
+    EXPECT_EQ(expected_signals.size(), m_platio->signal_names().size());
+    EXPECT_EQ(expected_signals, m_platio->signal_names());
+
+    std::set<std::string> expected_controls {"FREQ", "MODE"};
+    EXPECT_EQ(expected_controls.size(), m_platio->control_names().size());
+    EXPECT_EQ(expected_controls, m_platio->control_names());
 }
 
-TEST_F(PlatformIOTest, whitelist)
+
+TEST_F(PlatformIOTest, signal_control_description)
 {
-    std::ifstream file("test/legacy_whitelist.out");
-    std::string line;
-    uint64_t offset;
-    uint64_t  mask;
-    std::string comment;
-    std::map<uint64_t, uint64_t> legacy_map;
-    std::map<uint64_t, uint64_t> curr_map;
-    while (std::getline(file, line)) {
-        if (line.compare(0, 1, "#") == 0) continue;
-        std::string tmp;
-        size_t sz;
-        std::istringstream iss(line);
-        iss >> tmp;
-        offset = std::stoull(tmp, &sz, 16);
-        iss >> tmp;
-        mask = std::stoull(tmp, &sz, 16);
-        iss >> comment;// #
-        iss >> comment;// comment
-        legacy_map[offset] = mask;
-    }
-
-    std::string whitelist = m_platform_io->msr_whitelist();
-    std::istringstream iss(whitelist);
-    std::getline(iss, line);// throw away title line
-    while (std::getline(iss, line)) {
-        std::string tmp;
-        size_t sz;
-        std::istringstream iss(line);
-        iss >> tmp;
-        offset = std::stoull(tmp, &sz, 16);
-        iss >> tmp;
-        mask = std::stoull(tmp, &sz, 16);
-        iss >> comment;// #
-        iss >> comment;// comment
-        curr_map[offset] = mask;
-    }
-
-    for (auto it = curr_map.begin(); it != curr_map.end(); ++it) {
-        offset = it->first;
-        mask = it->second;
-        auto leg_it = legacy_map.find(offset);
-        if (leg_it == legacy_map.end()) {
-            //not found error
-            if (!mask) {
-                EXPECT_TRUE(false) << std::setfill('0') << std::hex << "new read offset 0x" << std::setw(8) << offset << " introduced";
-            }
-            continue;
+    std::string time_description = "time signal";
+    std::string freq_signal_desc = "freq signal";
+    std::string freq_control_desc = "freq control";
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_signal("TIME")) {
+            EXPECT_CALL(*it, signal_description("TIME"))
+                .WillOnce(Return(time_description));
         }
-        uint64_t leg_mask = leg_it->second;
-        EXPECT_EQ(mask, mask & leg_mask) << std::setfill('0') << std::hex << "offset 0x" << std::setw(8) << offset << "write mask change detected, from 0x"
-            << std::setw(16) << leg_mask << " to 0x" << mask << " bitwise AND yields 0x" << (mask & leg_mask);
+        if (it->is_valid_signal("FREQ")) {
+            EXPECT_CALL(*it, signal_description("FREQ"))
+                .WillOnce(Return(freq_signal_desc));
+        }
+        if (it->is_valid_control("FREQ")) {
+            EXPECT_CALL(*it, control_description("FREQ"))
+                .WillOnce(Return(freq_control_desc));
+        }
     }
+    EXPECT_EQ(time_description, m_platio->signal_description("TIME"));
+    EXPECT_EQ(freq_signal_desc, m_platio->signal_description("FREQ"));
+    EXPECT_EQ(freq_control_desc, m_platio->control_description("FREQ"));
 }
 
-TEST_F(PlatformIOTest, freq_ctl)
+TEST_F(PlatformIOTest, domain_type)
 {
-    int fd = open("test_msrio_dev_cpu_0_msr_safe",  O_RDWR);
-    ASSERT_NE(-1, fd);
-    uint64_t value;
-    size_t num_read;
-    num_read = pread(fd, &value, sizeof(value), 0x0);
-    EXPECT_EQ(8ULL, num_read);
-    EXPECT_EQ(0x0ULL, value);
-    num_read = pread(fd, &value, sizeof(value), 0x198);
-    EXPECT_EQ(8ULL, num_read);
-    EXPECT_EQ(0x0198019801980198ULL, value);
-    num_read = pread(fd, &value, sizeof(value), 0x1A0);
-    EXPECT_EQ(8ULL, num_read);
-    EXPECT_EQ(0x01A001A001A001A0ULL, value);
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_signal("TIME")) {
+            EXPECT_CALL(*it, signal_domain_type("TIME"));
+        }
+        if (it->is_valid_signal("FREQ")) {
+            EXPECT_CALL(*it, signal_domain_type("FREQ"));
+        }
+        if (it->is_valid_control("FREQ")) {
+            EXPECT_CALL(*it, control_domain_type("FREQ"));
+        }
+        if (it->is_valid_signal("ENERGY_PACKAGE")) {
+            EXPECT_CALL(*it, signal_domain_type("ENERGY_PACKAGE"));
+        }
+        if (it->is_valid_signal("ENERGY_DRAM")) {
+            EXPECT_CALL(*it, signal_domain_type("ENERGY_DRAM"));
+        }
+    }
 
-    int idx = m_platform_io->push_control("PERF_CTL:FREQ", geopm::IPlatformIO::M_DOMAIN_CPU, 0);
-    ASSERT_EQ(0, idx);
-    // Set frequency to 1 GHz
-    m_platform_io->adjust(std::vector<double>{1e9});
-    num_read = pread(fd, &value, sizeof(value), 0x199);
-    EXPECT_EQ(8ULL, num_read);
-    EXPECT_EQ(0xA00ULL, (value & 0xFF00));
-    // Set frequency to 5 GHz
-    m_platform_io->adjust(std::vector<double>{5e9});
-    num_read = pread(fd, &value, sizeof(value), 0x199);
-    EXPECT_EQ(8ULL, num_read);
-    EXPECT_EQ(0x3200ULL, (value & 0xFF00));
-    close(fd);
+    int domain_type = m_platio->signal_domain_type("TIME");
+    EXPECT_EQ(IPlatformTopo::M_DOMAIN_BOARD, domain_type);
+    domain_type = m_platio->signal_domain_type("FREQ");
+    EXPECT_EQ(IPlatformTopo::M_DOMAIN_CPU, domain_type);
+    domain_type = m_platio->signal_domain_type("POWER_PACKAGE");
+    EXPECT_EQ(IPlatformTopo::M_DOMAIN_PACKAGE, domain_type);
+    domain_type = m_platio->signal_domain_type("POWER_DRAM");
+    EXPECT_EQ(IPlatformTopo::M_DOMAIN_BOARD_MEMORY, domain_type);
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->signal_domain_type("INVALID"),
+                               GEOPM_ERROR_INVALID, "signal name \"INVALID\" not found");
+
+    domain_type = m_platio->control_domain_type("FREQ");
+    EXPECT_EQ(IPlatformTopo::M_DOMAIN_CPU, domain_type);
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->control_domain_type("INVALID"),
+                               GEOPM_ERROR_INVALID, "control name \"INVALID\" not found");
 }
 
-TEST_F(PlatformIOTest, time_signal)
+TEST_F(PlatformIOTest, push_signal)
 {
-    int idx = m_platform_io->push_signal("TIME", geopm::IPlatformIO::M_DOMAIN_CPU, 0);
-    ASSERT_EQ(0, idx);
-    std::vector<double> sample(1);
-    double time_0 = m_platform_io->sample(idx);
-    sleep(1);
-    double time_1 = m_platform_io->sample(idx);
-    EXPECT_NEAR(1, time_1 - time_0, 0.1);
-    EXPECT_LE(0, time_0);
-    EXPECT_LE(0, time_1);
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_signal("TIME")) {
+            EXPECT_CALL(*it, push_signal("TIME", _, _));
+            EXPECT_CALL(*it, signal_domain_type("TIME"));
+        }
+        if (it->is_valid_signal("FREQ")) {
+            EXPECT_CALL(*it, push_signal("FREQ", _, _));
+            EXPECT_CALL(*it, signal_domain_type("FREQ"));
+        }
+        EXPECT_CALL(*it, read_batch());
+    }
+
+    EXPECT_EQ(0, m_platio->num_signal());
+
+    int idx = m_platio->push_signal("FREQ", IPlatformTopo::M_DOMAIN_CPU, 0);
+    EXPECT_EQ(0, idx);
+    idx = m_platio->push_signal("TIME", IPlatformTopo::M_DOMAIN_BOARD, 0);
+    EXPECT_EQ(1, idx);
+    EXPECT_EQ(idx, m_platio->push_signal("TIME", IPlatformTopo::M_DOMAIN_BOARD, 0));
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->push_signal("INVALID", IPlatformTopo::M_DOMAIN_CPU, 0),
+                               GEOPM_ERROR_INVALID, "signal name \"INVALID\" not found");
+
+    EXPECT_EQ(2, m_platio->num_signal());
+
+    m_platio->read_batch();
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->push_signal("TIME", IPlatformTopo::M_DOMAIN_BOARD, 0),
+                               GEOPM_ERROR_INVALID, "pushing signals after");
+}
+
+TEST_F(PlatformIOTest, push_signal_agg)
+{
+    EXPECT_CALL(m_topo, is_domain_within(IPlatformTopo::M_DOMAIN_CPU,
+                                         IPlatformTopo::M_DOMAIN_PACKAGE));
+    std::set<int> package_cpus {0, 1, 2, 3};
+    ASSERT_EQ(M_NUM_CPU, package_cpus.size());
+    EXPECT_CALL(m_topo, domain_cpus(IPlatformTopo::M_DOMAIN_PACKAGE, 0))
+        .WillOnce(Return(package_cpus));
+    EXPECT_CALL(m_topo, domain_idx(IPlatformTopo::M_DOMAIN_CPU, _))
+        .Times(M_NUM_CPU);
+
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_signal("FREQ")) {
+            EXPECT_CALL(*it, push_signal("FREQ", _, _)).Times(M_NUM_CPU);
+            // called once for initial push, once for converting domain, once for each cpu,
+            EXPECT_CALL(*it, signal_domain_type("FREQ")).Times(2 + M_NUM_CPU);
+            EXPECT_CALL(*it, agg_function("FREQ"))
+                .WillOnce(Return(geopm::Agg::average));
+        }
+    }
+
+    EXPECT_EQ(0, m_platio->num_signal());
+    // Domain of FREQ is CPU
+    m_platio->push_signal("FREQ", IPlatformTopo::M_DOMAIN_PACKAGE, 0);
+    EXPECT_EQ(1 + M_NUM_CPU, (unsigned int)m_platio->num_signal());
+}
+
+TEST_F(PlatformIOTest, signal_power)
+{
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_signal("TIME")) {
+            EXPECT_CALL(*it, push_signal("TIME", _, _))
+                .Times(1);
+            EXPECT_CALL(*it, signal_domain_type("TIME"))
+                .Times(1);
+        }
+        if (it->is_valid_signal("ENERGY_PACKAGE")) {
+            EXPECT_CALL(*it, push_signal("ENERGY_PACKAGE", _, _))
+                .Times(1);
+            EXPECT_CALL(*it, signal_domain_type("ENERGY_PACKAGE"))
+                .Times(1);
+        }
+        if (it->is_valid_signal("ENERGY_DRAM")) {
+            EXPECT_CALL(*it, push_signal("ENERGY_DRAM", _, _))
+                .Times(1);
+            EXPECT_CALL(*it, signal_domain_type("ENERGY_DRAM"))
+                .Times(1);
+        }
+    }
+
+    int pkg_idx = m_platio->push_signal("POWER_PACKAGE", IPlatformTopo::M_DOMAIN_PACKAGE, 0);
+    int pkg_energy_idx = m_platio->push_signal("ENERGY_PACKAGE", IPlatformTopo::M_DOMAIN_PACKAGE, 0);
+    EXPECT_NE(pkg_energy_idx, pkg_idx);
+    int dram_idx = m_platio->push_signal("POWER_DRAM", IPlatformTopo::M_DOMAIN_BOARD_MEMORY, 0);
+    int dram_energy_idx = m_platio->push_signal("ENERGY_DRAM", IPlatformTopo::M_DOMAIN_BOARD_MEMORY, 0);
+    EXPECT_NE(dram_energy_idx, dram_idx);
+
+    for (auto &it : m_iogroup_ptr) {
+        EXPECT_CALL(*it, read_batch()).Times(3);
+        if (it->is_valid_signal("TIME")) {
+            EXPECT_CALL(*it, sample(0))
+                .WillOnce(Return(2.0)).WillOnce(Return(2.0))
+                .WillOnce(Return(3.0)).WillOnce(Return(3.0))
+                .WillOnce(Return(4.0)).WillOnce(Return(4.0));
+        }
+        if (it->is_valid_signal("ENERGY_PACKAGE")) {
+            EXPECT_CALL(*it, sample(0))
+                .WillOnce(Return(777.77))
+                .WillOnce(Return(888.88))
+                .WillOnce(Return(999.99));
+        }
+        if (it->is_valid_signal("ENERGY_DRAM")) {
+            EXPECT_CALL(*it, sample(0))
+                .WillOnce(Return(333.33))
+                .WillOnce(Return(555.55))
+                .WillOnce(Return(777.77));
+        }
+    }
+
+    m_platio->read_batch();
+    double result = m_platio->sample(pkg_idx);
+    EXPECT_TRUE(std::isnan(result)); // only one sample so far
+    result = m_platio->sample(dram_idx);
+    EXPECT_TRUE(std::isnan(result));
+
+    m_platio->read_batch();
+    result = m_platio->sample(pkg_idx);
+    EXPECT_DOUBLE_EQ(111.11, result);
+    result = m_platio->sample(dram_idx);
+    EXPECT_DOUBLE_EQ(222.22, result);
+
+    m_platio->read_batch();
+    result = m_platio->sample(pkg_idx);
+    EXPECT_DOUBLE_EQ(111.11, result);
+    result = m_platio->sample(dram_idx);
+    EXPECT_DOUBLE_EQ(222.22, result);
+}
+
+TEST_F(PlatformIOTest, push_control)
+{
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_control("FREQ")) {
+            EXPECT_CALL(*it, push_control("FREQ", IPlatformTopo::M_DOMAIN_CPU, 0));
+            EXPECT_CALL(*it, control_domain_type("FREQ"));
+        }
+    }
+
+    EXPECT_EQ(0, m_platio->num_control());
+
+    int idx = m_platio->push_control("FREQ", IPlatformTopo::M_DOMAIN_CPU, 0);
+    EXPECT_EQ(0, idx);
+    EXPECT_EQ(idx, m_platio->push_control("FREQ", IPlatformTopo::M_DOMAIN_CPU, 0));
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->push_control("INVALID", IPlatformTopo::M_DOMAIN_CPU, 0),
+                               GEOPM_ERROR_INVALID, "control name \"INVALID\" not found");
+
+    EXPECT_EQ(1, m_platio->num_control());
+}
+
+TEST_F(PlatformIOTest, push_control_agg)
+{
+    EXPECT_CALL(m_topo, is_domain_within(IPlatformTopo::M_DOMAIN_CPU,
+                                         IPlatformTopo::M_DOMAIN_PACKAGE));
+    std::set<int> package_cpus {0, 1, 2, 3};
+    ASSERT_EQ(M_NUM_CPU, package_cpus.size());
+    EXPECT_CALL(m_topo, domain_cpus(IPlatformTopo::M_DOMAIN_PACKAGE, 0))
+        .WillOnce(Return(package_cpus));
+    EXPECT_CALL(m_topo, domain_idx(IPlatformTopo::M_DOMAIN_CPU, _))
+        .Times(M_NUM_CPU);
+
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_control("FREQ")) {
+            EXPECT_CALL(*it, push_control("FREQ", IPlatformTopo::M_DOMAIN_CPU, _))
+                .Times(M_NUM_CPU);
+            // called once for initial push, once for converting domain, once for each cpu,
+            EXPECT_CALL(*it, control_domain_type("FREQ")).Times(2 + M_NUM_CPU);
+        }
+    }
+
+    EXPECT_EQ(0, m_platio->num_control());
+
+    m_platio->push_control("FREQ", IPlatformTopo::M_DOMAIN_PACKAGE, 0);
+    EXPECT_EQ(1 + M_NUM_CPU, (unsigned int)m_platio->num_control());
+}
+
+TEST_F(PlatformIOTest, sample)
+{
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_signal("FREQ")) {
+            EXPECT_CALL(*it, sample(0)).WillOnce(Return(2e9));
+            EXPECT_CALL(*it, push_signal(_, _, _));
+            EXPECT_CALL(*it, signal_domain_type("FREQ"));
+        }
+        if (it->is_valid_signal("TIME")) {
+            EXPECT_CALL(*it, sample(0)).WillOnce(Return(1.0));
+            EXPECT_CALL(*it, push_signal(_, _, _));
+            EXPECT_CALL(*it, signal_domain_type("TIME"));
+        }
+        EXPECT_CALL(*it, read_batch());
+    }
+    int freq_idx = m_platio->push_signal("FREQ", IPlatformTopo::M_DOMAIN_CPU, 0);
+    int time_idx = m_platio->push_signal("TIME", IPlatformTopo::M_DOMAIN_BOARD, 0);
+    m_platio->read_batch();
+    EXPECT_EQ(0, freq_idx);
+    EXPECT_EQ(1, time_idx);
+    double freq = m_platio->sample(freq_idx);
+    EXPECT_DOUBLE_EQ(2e9, freq);
+    double time = m_platio->sample(time_idx);
+    EXPECT_DOUBLE_EQ(1.0, time);
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->sample(-1), GEOPM_ERROR_INVALID, "signal_idx out of range");
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->sample(10), GEOPM_ERROR_INVALID, "signal_idx out of range");
+}
+
+TEST_F(PlatformIOTest, sample_agg)
+{
+    EXPECT_CALL(m_topo, is_domain_within(IPlatformTopo::M_DOMAIN_CPU,
+                                         IPlatformTopo::M_DOMAIN_PACKAGE));
+    std::set<int> package_cpus {0, 1, 2, 3};
+    ASSERT_EQ(M_NUM_CPU, package_cpus.size());
+    EXPECT_CALL(m_topo, domain_cpus(IPlatformTopo::M_DOMAIN_PACKAGE, 0))
+        .WillOnce(Return(package_cpus));
+    EXPECT_CALL(m_topo, domain_idx(IPlatformTopo::M_DOMAIN_CPU, _))
+        .Times(M_NUM_CPU);
+
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_signal("FREQ")) {
+            // called once for initial push, once for converting domain, once for each cpu,
+            EXPECT_CALL(*it, signal_domain_type("FREQ")).Times(2 + M_NUM_CPU);
+            EXPECT_CALL(*it, agg_function("FREQ"))
+                .WillOnce(Return(geopm::Agg::average));
+            for (unsigned int ii = 0; ii < M_NUM_CPU; ++ii) {
+                EXPECT_CALL(*it, push_signal("FREQ", IPlatformTopo::M_DOMAIN_CPU, ii))
+                    .WillOnce(Return(ii));
+                EXPECT_CALL(*it, sample(ii)).WillOnce(Return(ii));
+            }
+        }
+        EXPECT_CALL(*it, read_batch());
+    }
+    double sum = 0;
+    for (unsigned int ii = 0; ii < M_NUM_CPU; ++ii) {
+        sum += ii;
+    }
+    int freq_idx = m_platio->push_signal("FREQ", IPlatformTopo::M_DOMAIN_PACKAGE, 0);
+    m_platio->read_batch();
+    double freq = m_platio->sample(freq_idx);
+    EXPECT_DOUBLE_EQ(sum / M_NUM_CPU, freq);
+}
+
+TEST_F(PlatformIOTest, adjust)
+{
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_control("FREQ")) {
+            EXPECT_CALL(*it, push_control("FREQ", _, _));
+            EXPECT_CALL(*it, adjust(0, 3e9));
+            EXPECT_CALL(*it, control_domain_type("FREQ"));
+        }
+        EXPECT_CALL(*it, write_batch());
+    }
+    int freq_idx = m_platio->push_control("FREQ", IPlatformTopo::M_DOMAIN_CPU, 0);
+    EXPECT_EQ(0, freq_idx);
+    m_platio->adjust(freq_idx, 3e9);
+    m_platio->write_batch();
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->adjust(-1, 0.0), GEOPM_ERROR_INVALID, "control_idx out of range");
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->adjust(10, 0.0), GEOPM_ERROR_INVALID, "control_idx out of range");
+}
+
+TEST_F(PlatformIOTest, adjust_agg)
+{
+    EXPECT_CALL(m_topo, is_domain_within(IPlatformTopo::M_DOMAIN_CPU,
+                                         IPlatformTopo::M_DOMAIN_PACKAGE));
+    std::set<int> package_cpus {0, 1, 2, 3};
+    ASSERT_EQ(M_NUM_CPU, package_cpus.size());
+    EXPECT_CALL(m_topo, domain_cpus(IPlatformTopo::M_DOMAIN_PACKAGE, 0))
+        .WillOnce(Return(package_cpus));
+    EXPECT_CALL(m_topo, domain_idx(IPlatformTopo::M_DOMAIN_CPU, _))
+        .Times(M_NUM_CPU);
+
+    double value = 1.23e9;
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_control("FREQ")) {
+            // called once for initial push, once for converting domain, once for each cpu,
+            EXPECT_CALL(*it, control_domain_type("FREQ")).Times(2 + M_NUM_CPU);
+            // adjusting package will adjust every cpu on the package
+            for (unsigned int ii = 0; ii < M_NUM_CPU; ++ii) {
+                EXPECT_CALL(*it, push_control("FREQ", IPlatformTopo::M_DOMAIN_CPU, ii))
+                    .WillOnce(Return(ii));
+                EXPECT_CALL(*it, adjust(ii, value));
+            }
+        }
+        EXPECT_CALL(*it, write_batch());
+    }
+    int freq_idx = m_platio->push_control("FREQ", IPlatformTopo::M_DOMAIN_PACKAGE, 0);
+    m_platio->adjust(freq_idx, value);
+    m_platio->write_batch();
+}
+
+TEST_F(PlatformIOTest, read_signal)
+{
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_signal("FREQ")) {
+            EXPECT_CALL(*it, read_signal("FREQ", IPlatformTopo::M_DOMAIN_CPU, 0)).WillOnce(Return(4e9));
+        }
+        if (it->is_valid_signal("TIME")) {
+            EXPECT_CALL(*it, read_signal("TIME", IPlatformTopo::M_DOMAIN_BOARD, 0)).WillOnce(Return(2.0));
+        }
+        EXPECT_CALL(*it, read_batch()).Times(0);
+    }
+    double freq = m_platio->read_signal("FREQ", IPlatformTopo::M_DOMAIN_CPU, 0);
+    double time = m_platio->read_signal("TIME", IPlatformTopo::M_DOMAIN_BOARD, 0);
+    EXPECT_DOUBLE_EQ(4e9, freq);
+    EXPECT_DOUBLE_EQ(2.0, time);
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->read_signal("INVALID", IPlatformTopo::M_DOMAIN_CPU, 0),
+                               GEOPM_ERROR_INVALID, "signal name \"INVALID\" not found");
+}
+
+TEST_F(PlatformIOTest, write_control)
+{
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_control("FREQ")) {
+            EXPECT_CALL(*it, write_control("FREQ", IPlatformTopo::M_DOMAIN_CPU, 0, 3e9));
+        }
+        EXPECT_CALL(*it, write_batch()).Times(0);
+    }
+    m_platio->write_control("FREQ", IPlatformTopo::M_DOMAIN_CPU, 0, 3e9);
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->write_control("INVALID", IPlatformTopo::M_DOMAIN_CPU, 0, 0.0),
+                               GEOPM_ERROR_INVALID, "control name \"INVALID\" not found");
+}
+
+TEST_F(PlatformIOTest, read_signal_override)
+{
+    for (auto &it : m_iogroup_ptr) {
+        EXPECT_CALL(*it, signal_domain_type("MODE"));
+        if (it->signal_domain_type("MODE") == IPlatformTopo::M_DOMAIN_BOARD) {
+            EXPECT_CALL(*it, read_signal("MODE", IPlatformTopo::M_DOMAIN_CPU, 0)).WillOnce(Return(5e9));
+        }
+        else {
+            EXPECT_CALL(*it, read_signal(_, _, _)).Times(0);
+        }
+    }
+    double freq = m_platio->read_signal("MODE", IPlatformTopo::M_DOMAIN_CPU, 0);
+    EXPECT_DOUBLE_EQ(5e9, freq);
+}
+
+TEST_F(PlatformIOTest, agg_function)
+{
+    for (auto &it : m_iogroup_ptr) {
+        if (it->is_valid_signal("REGION_ID#")) {
+            EXPECT_CALL(*it, agg_function("REGION_ID#"));
+        }
+    }
+
+    auto region_id_func = m_platio->agg_function("REGION_ID#");
+    EXPECT_EQ(geopm_field_to_signal(GEOPM_REGION_ID_UNMARKED),
+              region_id_func({5, 6, 7}));
+
+    GEOPM_EXPECT_THROW_MESSAGE(m_platio->agg_function("INVALID"),
+                               GEOPM_ERROR_INVALID, "unknown how to aggregate");
 }

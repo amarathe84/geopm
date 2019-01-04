@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,117 +33,116 @@
 #ifndef PLATFORMIOINTERNAL_HPP_INCLUDE
 #define PLATFORMIOINTERNAL_HPP_INCLUDE
 
+#include <memory>
+#include <list>
+#include <vector>
+#include <map>
+#include <functional>
+#include <tuple>
+
+#include "PlatformIO.hpp"
+
 namespace geopm
 {
-    class IMSR;
-    class IMSRIO;
+    class IOGroup;
+    class CombinedSignal;
+    class IPlatformTopo;
 
     class PlatformIO : public IPlatformIO
     {
         public:
-            enum m_cpuid_e {
-                M_CPUID_SNB = 0x62D,
-                M_CPUID_IVT = 0x63E,
-                M_CPUID_HSX = 0x63F,
-                M_CPUID_BDX = 0x64F,
-                M_CPUID_KNL = 0x657,
-            };
-
             /// @brief Constructor for the PlatformIO class.
             PlatformIO();
+            PlatformIO(std::list<std::shared_ptr<IOGroup> > iogroup_list,
+                       IPlatformTopo &topo);
+            PlatformIO(const PlatformIO &other) = delete;
+            PlatformIO & operator=(const PlatformIO&) = delete;
             /// @brief Virtual destructor for the PlatformIO class.
-            virtual ~PlatformIO();
+            virtual ~PlatformIO() = default;
+            void register_iogroup(std::shared_ptr<IOGroup> iogroup) override;
+            std::set<std::string> signal_names(void) const override;
+            std::set<std::string> control_names(void) const override;
+            int signal_domain_type(const std::string &signal_name) const override;
+            int control_domain_type(const std::string &control_name) const override;
             int push_signal(const std::string &signal_name,
                             int domain_type,
-                            int domain_idx);
+                            int domain_idx) override;
             int push_control(const std::string &control_name,
                              int domain_type,
-                             int domain_idx);
-            void clear(void);
-            double sample(int signal_idx);
-            std::string log(int signal_idx, double sample);
-            void adjust(int control_idx,
-                        double setting);
-            void sample(std::vector<double> &signal);
-            void adjust(const std::vector<double> &setting);
-            std::string msr_whitelist(void);
-            std::string msr_whitelist(int cpuid);
-
-       protected:
-            virtual int cpuid(void);
-            virtual void init(void);
-            virtual void init_time(void);
-            /// @brief Register all signals and controls for the MSR
-            ///        interface.
-            virtual void init_msr(void);
-            /// @brief Activate all signals and controls that have
-            ///        been pushed since initialization or last call
-            ///        to clear().
-            virtual void activate(void);
-            /// @brief Call map_field() for MSRSignals and MSRConrols
-            ///        and configure MSRIO.
-            virtual void activate_msr(void);
-            /// @brief Register a single MSR field as a signal. This
-            ///        is called by init_msr().
-            /// @param [in] signal_name Compound signal name of form
-            ///        "msr_name:field_name" where msr_name is the
-            ///        name of the MSR and the field_name is the name
-            ///        of the signal field held in the MSR.
-            void register_msr_signal(const std::string &signal_name);
-            /// @brief Register a signal for the MSR interface.  This
-            ///        is called by init_msr().
-            /// @param [in] signal_name The name of the signal as it
-            ///        is requested by the push_signal() method.
-            /// @param [in] msr_name Vector of MSR names that are used
-            ///        to construct the signal.
-            /// @param [in] field_name Vector of field names that
-            ///        are read from each corresponding MSR in the
-            ///        msr_name vector.
-            void register_msr_signal(const std::string &signal_name,
-                                     const std::vector<std::string> &msr_name,
-                                     const std::vector<std::string> &field_name);
-            /// @brief Register a single MSR field as a control. This
-            ///        is called by init_msr().
-            /// @param [in] signal_name Compound control name of form
-            ///        "msr_name:field_name" where msr_name is the
-            ///        name of the MSR and the field_name is the name
-            ///        of the control field held in the MSR.
-            void register_msr_control(const std::string &control_name);
-            /// @brief Register a contol for the MSR interface.  This
-            ///        is called by init_msr().
-            /// @param [in] control_name The name of the control as it
-            ///        is requested by the push_control() method.
-            /// @param [in] msr_name Vector of MSR names that are used
-            ///        to apply the control.
-            /// @param [in] field_name Vector of field names that
-            ///        are written to in each corresponding MSR in
-            ///        the msr_name vector.
-            void register_msr_control(const std::string &control_name,
-                                      const std::vector<std::string> &msr_name,
-                                      const std::vector<std::string> &field_name);
-
-            const int m_num_cpu;
-            bool m_is_init;
+                             int domain_idx) override;
+            int num_signal(void) const override;
+            int num_control(void) const override;
+            double sample(int signal_idx) override;
+            void adjust(int control_idx, double setting) override;
+            void read_batch(void) override;
+            void write_batch(void) override;
+            double read_signal(const std::string &signal_name,
+                               int domain_type,
+                               int domain_idx) override;
+            void write_control(const std::string &control_name,
+                               int domain_type,
+                               int domain_idx,
+                               double setting) override;
+            void save_control(void) override;
+            void restore_control(void) override;
+            std::function<double(const std::vector<double> &)> agg_function(const std::string &signal_name) const override;
+            std::string signal_description(const std::string &signal_name) const override;
+            std::string control_description(const std::string &control_name) const override;
+        private:
+            /// @brief Push a signal that aggregates values sampled
+            ///        from other signals.  The aggregation function
+            ///        used is determined by a call to agg_function()
+            ///        with the given signal name.
+            /// @param [in] signal_name Name of the signal requested.
+            /// @param [in] domain_type One of the values from the
+            ///        m_domain_e enum described in PlatformTopo.hpp.
+            /// @param [in] domain_idx The index of the domain within
+            ///        the set of domains of the same type on the
+            ///        platform.
+            /// @param [in] sub_signal_idx Vector of previously pushed
+            ///        signals whose values will be used to generate
+            ///        the combined signal.
+            /// @return Index of signal when sample() method is called
+            ///         or throws if the signal is not valid
+            ///         on the platform.
+            int push_combined_signal(const std::string &signal_name,
+                                     int domain_type,
+                                     int domain_idx,
+                                     const std::vector<int> &sub_signal_idx);
+            /// @brief Save a high-level signal as a combination of other signals.
+            /// @param [in] signal_idx Index a caller can use to refer to this signal.
+            /// @param [in] operands Input signal indices to be combined.  These must
+            ///             be valid pushed signals registered with PlatformIO.
+            /// @param [in] func The function that will combine the signals into
+            ///             a single result.
+            void register_combined_signal(int signal_idx,
+                                          std::vector<int> operands,
+                                          std::unique_ptr<CombinedSignal> signal);
+            int push_signal_power(const std::string &signal_name,
+                                  int domain_type,
+                                  int domain_idx);
+            int push_signal_temperature(const std::string &signal_name,
+                                        int domain_type,
+                                        int domain_idx);
+            int push_signal_convert_domain(const std::string &signal_name,
+                                           int domain_type,
+                                           int domain_idx);
+            int push_control_convert_domain(const std::string &control_name,
+                                            int domain_type,
+                                            int domain_idx);
+            /// @brief Sample a combined signal using the saved function and operands.
+            double sample_combined(int signal_idx);
             bool m_is_active;
-            IMSRIO *m_msrio;
-            std::map<std::string, const IMSR *> m_name_msr_map;
-            std::map<std::string, std::vector<ISignal *> > m_name_cpu_signal_map;
-            std::map<std::string, std::vector<IControl *> > m_name_cpu_control_map;
-            std::vector<ISignal *> m_active_signal;
-            std::vector<IControl *> m_active_control;
-            // Vectors are over MSRs for all active signals
-            std::vector<uint64_t> m_msr_read_field;
-            std::vector<off_t>    m_msr_read_signal_off;
-            std::vector<int>      m_msr_read_signal_len;
-            std::vector<int>      m_msr_read_cpu_idx;
-            std::vector<uint64_t> m_msr_read_offset;
-            // Vectors are over MSRs for all active controls
-            std::vector<uint64_t> m_msr_write_field;
-            std::vector<off_t>    m_msr_write_control_off;
-            std::vector<int>      m_msr_write_control_len;
-            std::vector<int>      m_msr_write_cpu_idx;
-            std::vector<uint64_t> m_msr_write_offset;
-            std::vector<uint64_t> m_msr_write_mask;
+            IPlatformTopo &m_platform_topo;
+            std::list<std::shared_ptr<IOGroup> > m_iogroup_list;
+            std::vector<std::pair<IOGroup *, int> > m_active_signal;
+            std::vector<std::pair<IOGroup *, int> > m_active_control;
+            std::map<std::tuple<std::string, int, int>, int> m_existing_signal;
+            std::map<std::tuple<std::string, int, int>, int> m_existing_control;
+            std::map<int, std::pair<std::vector<int>,
+                                    std::unique_ptr<CombinedSignal> > > m_combined_signal;
+            std::map<int, std::vector<int> > m_combined_control;
+            bool m_do_restore;
     };
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017, Intel Corporation
+ * Copyright (c) 2015, 2016, 2017, 2018, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -48,7 +48,7 @@ uint64_t geopm_mpi_func_rid(const char *func_name);
 #define GEOPM_PMPI_ENTER_MACRO(FUNC) \
     static unsigned is_once = 1; \
     static uint64_t func_rid = 0; \
-    if (is_once) { \
+    if (is_once || func_rid == 0) { \
         func_rid = geopm_mpi_func_rid(FUNC); \
         is_once = 0; \
     } \

@@ -37,9 +37,12 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <set>
+#include <list>
 
-#include <geopm_message.h>
-#include <GlobalPolicy.hpp>
+#include "PlatformIO.hpp"
+
+struct geopm_region_info_s;
 
 namespace geopm
 {
@@ -47,23 +50,66 @@ namespace geopm
     class ITracer
     {
         public:
-            ITracer() {}
-            virtual ~ITracer() {}
-            virtual void update(const std::vector <struct geopm_telemetry_message_s> &telemetry) = 0;
-            virtual void update(const struct geopm_policy_message_s &policy) = 0;
+            ITracer() = default;
+            virtual ~ITracer() = default;
+            /// @brief Set up default columns and add columns to be
+            //         provided by the Agent.
+            virtual void columns(const std::vector<std::string> &agent_cols) = 0;
+            /// @brief Update the trace with telemetry samples and
+            ///        region info.  The Tracer samples values for
+            ///        default and environment columns and the
+            ///        remaining signal values are provided by the
+            ///        Agent.
+            /// @param [in] agent_signals Values for signals provided
+            ///        by the agent.
+            /// @param [in] region_entry_exit Entries and exits to
+            ///        regions recorded by the application.  There may
+            ///        be multiple entires and exits for each
+            ///        telemetry sample.
+            virtual void update(const std::vector<double> &agent_signals,
+                                std::list<geopm_region_info_s> region_entry_exit) = 0;
+            /// @brief Write the remaining trace data to the file and
+            ///        stop tracing.
+            virtual void flush(void) = 0;
+            /// @brief Returns the column header to be displayed in
+            ///        the trace.  The string is based on the signal
+            ///        name.  If the domain type is board, the name
+            ///        only will be used.  Otherwise, the column
+            ///        header includes the name, domain type, and
+            ///        domain index.
+            /// @param [in] col The request structure containing the
+            ///        signal name, domain type, and domain index.
+            static std::string pretty_name(const IPlatformIO::m_request_s &col);
     };
+
+    class IPlatformIO;
 
     /// @brief Class used to write a trace of the telemetry and policy.
     class Tracer : public ITracer
     {
         public:
             /// @brief Tracer constructor.
-            Tracer(std::string header);
+            Tracer(const std::string &start_time);
+            Tracer(const std::string &start_time,
+                   const std::string &file_path,
+                   const std::string &hostname,
+                   const std::string &agent,
+                   const std::string &profile_name,
+                   bool do_trace,
+                   IPlatformIO &platform_io,
+                   const std::vector<std::string> &env_column,
+                   int precision);
             /// @brief Tracer destructor, virtual.
             virtual ~Tracer();
-            void update(const std::vector <struct geopm_telemetry_message_s> &telemetry);
-            void update(const struct geopm_policy_message_s &policy);
-        protected:
+            void columns(const std::vector<std::string> &agent_cols) override;
+            void update(const std::vector<double> &agent_signals,
+                        std::list<geopm_region_info_s> region_entry_exit) override;
+            void flush(void) override;
+        private:
+            static std::string hostname(void);
+            /// @brief Format and write the values in m_last_telemetry to the trace.
+            void write_line(void);
+            std::string m_file_path;
             std::string m_header;
             std::string m_hostname;
             bool m_is_trace_enabled;
@@ -71,8 +117,16 @@ namespace geopm
             std::ofstream m_stream;
             std::ostringstream m_buffer;
             off_t m_buffer_limit;
-            struct geopm_time_s m_time_zero;
-            struct geopm_policy_message_s m_policy;
+
+            IPlatformIO &m_platform_io;
+            std::vector<std::string> m_env_column; // extra columns from environment
+            int m_precision;
+            std::vector<int> m_column_idx; // columns sampled by Tracer
+            std::set<int> m_hex_column;
+            std::vector<double> m_last_telemetry;
+            int m_region_id_idx = -1;
+            int m_region_progress_idx = -1;
+            int m_region_runtime_idx = -1;
     };
 }
 
