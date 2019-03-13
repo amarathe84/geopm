@@ -59,11 +59,21 @@ namespace geopm
     /// @param [in] delim The delimiter to use to divide the string.
     ///        Cannot be empty.
     /// @return A vector of string pieces.
-    std::vector<std::string> split_string(const std::string &str,
+    std::vector<std::string> string_split(const std::string &str,
                                           const std::string &delim);
 
     /// @brief Returns the current hostname as a string.
     std::string hostname(void);
+
+    /// @brief List all files in the given directory.
+    /// @param [in] path Path to the directory.
+    std::vector<std::string> list_directory_files(const std::string &path);
+
+    /// @brief Returns whether one string begins with another.
+    int string_begins_with(const std::string &str, const std::string &key);
+
+    /// @brief Returns whether one string ends with another.
+    int string_ends_with(std::string str, std::string key);
 }
 
 #endif

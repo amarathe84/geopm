@@ -100,7 +100,7 @@ GTEST_TESTS = test/gtest_links/AgentFactoryTest.static_info_monitor \
               test/gtest_links/EpochRuntimeRegulatorTest.rank_enter_exit_trace \
               test/gtest_links/EpochRuntimeRegulatorTest.unknown_region \
               test/gtest_links/ExceptionTest.hello \
-              test/gtest_links/HelperTest.split_string \
+              test/gtest_links/HelperTest.string_split \
               test/gtest_links/IOGroupTest.control_names_are_valid \
               test/gtest_links/IOGroupTest.controls_have_descriptions \
               test/gtest_links/IOGroupTest.signal_names_are_valid \
@@ -110,6 +110,10 @@ GTEST_TESTS = test/gtest_links/AgentFactoryTest.static_info_monitor \
               test/gtest_links/MSRIOGroupTest.control_alias \
               test/gtest_links/MSRIOGroupTest.control_error \
               test/gtest_links/MSRIOGroupTest.cpuid \
+              test/gtest_links/MSRIOGroupTest.parse_json_msrs \
+              test/gtest_links/MSRIOGroupTest.parse_json_msrs_error_fields \
+              test/gtest_links/MSRIOGroupTest.parse_json_msrs_error_msrs \
+              test/gtest_links/MSRIOGroupTest.parse_json_msrs_error_top_level \
               test/gtest_links/MSRIOGroupTest.push_control \
               test/gtest_links/MSRIOGroupTest.push_signal \
               test/gtest_links/MSRIOGroupTest.read_signal \
@@ -131,6 +135,8 @@ GTEST_TESTS = test/gtest_links/AgentFactoryTest.static_info_monitor \
               test/gtest_links/MSRTest.msr_control \
               test/gtest_links/MSRTest.msr_overflow \
               test/gtest_links/MSRTest.msr_signal \
+              test/gtest_links/MSRTest.string_to_function \
+              test/gtest_links/MSRTest.string_to_units \
               test/gtest_links/ManagerIOSamplerTest.negative_bad_files \
               test/gtest_links/ManagerIOSamplerTest.negative_parse_json_file \
               test/gtest_links/ManagerIOSamplerTest.negative_parse_shm \
