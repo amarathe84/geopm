@@ -103,6 +103,36 @@ namespace geopm
                 m_last_pkg_power_setting = target_pkg_power;
                 node_power_actual = m_num_pkg * target_pkg_power;
                 result = true;
+                printf("New node power: %lf\n", node_power_actual);
+            }
+        }
+        return result;
+    }
+
+    bool PowerGovernor::adjust_platform(double proc_power_request, double &proc_power_actual, int procid)
+    {
+#ifdef GEOPM_DEBUG
+        if (!m_control_idx.size()) {
+            throw Exception("PowerGovernor::" + std::string(__func__) + "(): init_platform_io has not been called.",
+                            GEOPM_ERROR_LOGIC, __FILE__, __LINE__);
+        }
+#endif
+        bool result = false;
+        if (!std::isnan(proc_power_request)) {
+            double target_pkg_power = proc_power_request;
+            if (target_pkg_power < m_min_pkg_power_policy) {
+                target_pkg_power = m_min_pkg_power_policy;
+            }
+            else if (target_pkg_power > m_max_pkg_power_policy) {
+                target_pkg_power = m_max_pkg_power_policy;
+            }
+            if (m_last_pkg_power_setting != target_pkg_power) {
+                for (auto ctl_idx : m_control_idx) {
+                    m_platform_io.adjust(ctl_idx, target_pkg_power);
+                }
+                m_last_pkg_power_setting = target_pkg_power;
+                proc_power_actual = m_num_pkg * target_pkg_power;
+                result = true;
             }
         }
         return result;

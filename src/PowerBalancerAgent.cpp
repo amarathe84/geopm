@@ -34,6 +34,7 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <unistd.h>
 
 #include "PowerGovernor.hpp"
 #include "PowerBalancerAgent.hpp"
@@ -45,6 +46,10 @@
 #include "Agg.hpp"
 #include "Helper.hpp"
 #include "config.h"
+#include "ControlMessage.hpp"
+#include "SharedMemory.hpp"
+//#include "AppConfigData.hpp"
+#include "geopm_env.h"
 
 namespace geopm
 {
@@ -163,10 +168,48 @@ namespace geopm
             m_power_balancer = geopm::make_unique<PowerBalancer>(M_STABILITY_FACTOR * m_power_governor->power_package_time_window());
         }
         init_platform_io();
+        init_config_explore_interface();
         m_is_step_complete = true;
     }
 
     PowerBalancerAgent::LeafRole::~LeafRole() = default;
+
+    void PowerBalancerAgent::LeafRole::init_config_explore_interface(void)
+    {
+        std::string sample_key(geopm_env_shmkey());
+        sample_key += configshmkey;
+        // Remove shared memory file if one already exists.
+        std::string sample_key_path(sample_key);
+        sample_key_path = "/dev/shm" + sample_key;
+        (void)unlink(sample_key_path.c_str());
+        m_app_ctl_shmem = make_unique<SharedMemory>(sample_key, sizeof(struct app_interface));
+        m_conf = (struct app_interface *)m_app_ctl_shmem->pointer();
+
+        /* Declare the PID of the balancer so that the instance of OMPT handler
+         * launched with the balancer (and shares its PID) does not report 
+         * itself in the configuration database 
+         */
+
+        m_conf->balancer_pid = getpid();
+        int thriter, pcapiter, prociter, regioniter;
+        for(prociter = 0; prociter < MAX_PROCS_PER_NODE; prociter++) {
+            for(thriter = 0; thriter < NUMTHREADS; thriter++) {
+                for(pcapiter = 0; pcapiter < NUMPCAPS; pcapiter++) {
+                    m_conf->config[prociter].threads[thriter*NUMPCAPS+pcapiter] = (thriter%NUMTHREADS)+1;
+                    m_conf->config[prociter].pcap[thriter*NUMPCAPS+pcapiter] = ((pcapiter%NUMPCAPS) + 1)*10 + 40;
+                    for(regioniter = 0; regioniter < MAX_REGIONS; regioniter++) {
+                        m_conf->region[prociter][regioniter].Pkg_watts[thriter*NUMPCAPS+pcapiter] = 9999.9f;
+                        m_conf->region[prociter][regioniter].elapsed_time[thriter*NUMPCAPS+pcapiter] = 120.0f;
+                    }
+                }
+            }
+            m_conf->epochid[prociter] = 0;
+            m_conf->configepochs[prociter] = NUMTHREADS * NUMPCAPS;
+            m_conf->pmap[prociter] = -1;
+//            m_conf->thread[prociter] = MAX_THREADS_PER_PROC;
+        } 
+        printf("Balancer: GetPID:%d\tGetPPID:%d\n", getpid(), getppid());
+    }
 
     void PowerBalancerAgent::LeafRole::init_platform_io(void)
     {
@@ -176,44 +219,75 @@ namespace geopm
         m_pio_idx[M_PLAT_SIGNAL_EPOCH_COUNT] = m_platform_io.push_signal("EPOCH_COUNT", IPlatformTopo::M_DOMAIN_BOARD, 0);
         m_pio_idx[M_PLAT_SIGNAL_EPOCH_RUNTIME_MPI] = m_platform_io.push_signal("EPOCH_RUNTIME_MPI", IPlatformTopo::M_DOMAIN_BOARD, 0);
         m_pio_idx[M_PLAT_SIGNAL_EPOCH_RUNTIME_IGNORE] = m_platform_io.push_signal("EPOCH_RUNTIME_IGNORE", IPlatformTopo::M_DOMAIN_BOARD, 0);
+
+    }
+
+    void PowerBalancerAgent::LeafRole::adjust_threads() {
+        
     }
 
     bool PowerBalancerAgent::LeafRole::adjust_platform(const std::vector<double> &in_policy)
     {
-        m_policy = in_policy;
-        if (in_policy[M_POLICY_POWER_CAP] != 0.0) {
-            // New power cap from resource manager, reset
-            // algorithm.
-            m_step_count = M_STEP_SEND_DOWN_LIMIT;
-            m_power_balancer->power_cap(in_policy[M_POLICY_POWER_CAP]);
-            if (in_policy[M_POLICY_POWER_CAP] > m_power_max) {
-                m_power_max = in_policy[M_POLICY_POWER_CAP];
-            }
-            m_is_step_complete = true;
-        }
-        else if (in_policy[M_POLICY_STEP_COUNT] != m_step_count) {
-            // Advance a step
-            ++m_step_count;
-            m_is_step_complete = false;
-            if (m_step_count != in_policy[M_POLICY_STEP_COUNT]) {
-                throw Exception("PowerBalancerAgent::adjust_platform(): The policy step is out of sync "
-                                "with the agent step or first policy received had a zero power cap.",
-                                GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
-            }
-            step_imp().enter_step(*this, in_policy);
-        }
-
         bool result = false;
-        // Request the power limit from the balancer
-        double request_limit = m_power_balancer->power_limit();
-        if (!std::isnan(request_limit) && request_limit != 0.0) {
-            result = m_power_governor->adjust_platform(request_limit, m_actual_limit);
-            if (request_limit < m_actual_limit) {
-                m_is_out_of_bounds = true;
+        m_policy = in_policy;
+       
+        if(m_conf->epochid[0] >= m_conf->configepochs[0]) { 
+            if (in_policy[M_POLICY_POWER_CAP] != 0.0) {
+                // New power cap from resource manager, reset
+                // algorithm.
+                m_step_count = M_STEP_SEND_DOWN_LIMIT;
+                m_power_balancer->power_cap(in_policy[M_POLICY_POWER_CAP]);
+                if (in_policy[M_POLICY_POWER_CAP] > m_power_max) {
+                    m_power_max = in_policy[M_POLICY_POWER_CAP];
+                }
+                m_is_step_complete = true;
             }
-            if (result) {
-                m_power_balancer->power_limit_adjusted(m_actual_limit);
+            else if (in_policy[M_POLICY_STEP_COUNT] != m_step_count) {
+                // Advance a step
+                ++m_step_count;
+                m_is_step_complete = false;
+                if (m_step_count != in_policy[M_POLICY_STEP_COUNT]) {
+                    throw Exception("PowerBalancerAgent::adjust_platform(): The policy step is out of sync "
+                                    "with the agent step or first policy received had a zero power cap.",
+                                    GEOPM_ERROR_RUNTIME, __FILE__, __LINE__);
+                }
+                step_imp().enter_step(*this, in_policy);
             }
+
+            // Request the power limit from the balancer
+            double request_limit = m_power_balancer->power_limit();
+            if (!std::isnan(request_limit) && request_limit != 0.0) {
+                result = m_power_governor->adjust_platform(request_limit, m_actual_limit);
+                if (request_limit < m_actual_limit) {
+                    m_is_out_of_bounds = true;
+                }
+                if (result) {
+                    m_power_balancer->power_limit_adjusted(m_actual_limit);
+                }
+                adjust_threads();
+            }
+        } else { /* We are in the configuration exploration phase:
+                    Calculate node power cap based on processor power caps */
+            
+            double node_power_cap = 0.0f;
+            int iter;
+//            printf("Runtime:"); 
+//            for(iter = 0; iter < MAX_PROCS_PER_NODE; iter++) {
+//                //printf("  %lf, ", m_platform_topo.read_signal("REGION_RUNTIME", IPlatformTopo::M_DOMAIN_BOARD, iter));
+//                printf("  %d, ", m_platform_io.push_signal("REGION_RUNTIME", IPlatformTopo::M_DOMAIN_PACKAGE, iter));
+//            }
+//            printf("\n");
+//            /* Move this into ConductorBalancer class */
+            for(iter = 0; iter < MAX_PROCS_PER_NODE; iter++) {
+                config_threads[iter] = m_conf->config[iter].threads[m_conf->epochid[iter]]; 
+                node_power_cap += m_conf->config[iter].pcap[m_conf->epochid[iter]];
+            }
+//            if(!std::isnan(node_power_cap) && (m_actual_limit != node_power_cap)) {
+////                result = m_power_governor->adjust_platform(node_power_cap, m_actual_limit);
+////                if (result) {
+////                    m_power_balancer->power_limit_adjusted(m_actual_limit);
+////                }
+//            }
         }
         return result;
     }
@@ -243,7 +317,9 @@ namespace geopm
                 "policy_power_slack",       // M_TRACE_SAMPLE_POLICY_POWER_SLACK
                 "epoch_runtime",            // M_TRACE_SAMPLE_EPOCH_RUNTIME
                 "power_limit",              // M_TRACE_SAMPLE_POWER_LIMIT
-                "enforced_power_limit"      // M_TRACE_SAMPLE_ENFORCED_POWER_LIMIT
+                "enforced_power_limit",     // M_TRACE_SAMPLE_ENFORCED_POWER_LIMIT
+                "p0_threads",                   // Number of threads selected
+                "p1_threads"                   // Number of threads selected
                };
     }
 
@@ -262,6 +338,9 @@ namespace geopm
         values[M_TRACE_SAMPLE_EPOCH_RUNTIME] = m_power_balancer->runtime_sample();
         values[M_TRACE_SAMPLE_POWER_LIMIT] = m_power_balancer->power_limit();
         values[M_TRACE_SAMPLE_ENFORCED_POWER_LIMIT] = m_actual_limit;
+        values[M_TRACE_SAMPLE_THREADS_P1] = config_threads[0];//m_conf->cselect[0][m_conf->regionidx[0]].threads;
+        values[M_TRACE_SAMPLE_THREADS_P2] = config_threads[1];//m_conf->cselect[1][m_conf->regionidx[1]].threads;
+//        printf("setting trace values: p0:%d p1:%d\n", m_conf->cselect[0][m_conf->regionidx[0]].threads, m_conf->cselect[1][m_conf->regionidx[1]].threads); 
     }
 
     PowerBalancerAgent::TreeRole::TreeRole(int level, const std::vector<int> &fan_in)

@@ -78,6 +78,7 @@ namespace geopm
             void init_platform_io(void) override;
             virtual void sample_platform(void) override;
             bool adjust_platform(double node_power_request, double &node_power_actual) override;
+            bool adjust_platform(double node_power_request, double &node_power_actual, int procid);
             void set_power_bounds(double min_pkg_power, double max_pkg_power) override;
             double power_package_time_window(void) const override;
         private:

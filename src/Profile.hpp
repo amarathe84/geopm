@@ -38,11 +38,14 @@
 #include <string>
 #include <list>
 #include <memory>
+#include "AppConfigData.hpp"
+#include "Helper.hpp"
 
 namespace geopm
 {
     class Comm;
     class ISharedMemoryUser;
+    class ISharedMemory;
     class IControlMessage;
     class IPlatformTopo;
     class IProfileTable;
@@ -250,6 +253,8 @@ namespace geopm
             void init_cpu_affinity(int shm_num_rank);
             void init_tprof_table(const std::string &tprof_key, IPlatformTopo &topo);
             void init_table(const std::string &sample_key);
+            void init_app_config();
+            void set_app_config();
         private:
             enum m_profile_const_e {
                 M_PROF_SAMPLE_PERIOD = 1,
@@ -317,6 +322,9 @@ namespace geopm
             double m_overhead_time;
             double m_overhead_time_startup;
             double m_overhead_time_shutdown;
+
+            std::unique_ptr<geopm::ISharedMemoryUser> m_app_ctl_shmem;
+            struct app_interface *m_conf;
     };
 }
 

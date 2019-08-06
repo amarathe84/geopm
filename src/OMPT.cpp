@@ -39,14 +39,19 @@
 #include <sstream>
 #include <iomanip>
 #include <sys/wait.h>
+#include <sys/types.h>
+#include <unistd.h>
+
 
 #include "geopm.h"
 #include "geopm_sched.h"
 #include "geopm_error.h"
+#include "geopm_env.h"
 #include "Exception.hpp"
 #include "OMPT.hpp"
 #include "config.h"
 
+#define GEOPM_ENABLE_OMPT
 #ifndef GEOPM_ENABLE_OMPT
 
 namespace geopm
@@ -61,14 +66,24 @@ namespace geopm
 #else // GEOPM_ENABLE_OMPT defined
 
 #include <ompt.h>
+#include <omp.h>
 
 extern "C"
 {
     int geopm_is_pmpi_prof_enabled(void);
 }
+#include <memory>
+#include "Helper.hpp"
+#include "ControlMessage.hpp"
+#include "SharedMemory.hpp"
+#include "AppConfigData.hpp"
+#include <unistd.h>
+#include <map>
+#include <sys/time.h>
 
 namespace geopm
 {
+
     class OMPT
     {
         public:
@@ -78,6 +93,12 @@ namespace geopm
             uint64_t region_id(void *parallel_function);
             void region_name(void *parallel_function, std::string &name);
             void region_name_pretty(std::string &name);
+            std::unique_ptr<geopm::ISharedMemoryUser> m_app_ctl_shmem;
+            struct app_interface *m_conf;
+            void init_omp_shmem(void);
+            int m_shm_rank;
+            struct timeval start_t, end_t;
+            int m_region_idx;
         private:
             /// Map from <virtual_address, is_end> pair representing
             /// half of a virtual address range to the object file
@@ -91,6 +112,37 @@ namespace geopm
     {
         static OMPT instance;
         return instance;
+    }
+
+    void OMPT::init_omp_shmem(void) {
+        std::string sample_key(geopm_env_shmkey());
+        sample_key += configshmkey;
+        // Remove shared memory file if one already exists.
+        std::string sample_key_path(sample_key);
+//        (void)unlink(sample_key_path.c_str());
+        m_app_ctl_shmem = std::unique_ptr<ISharedMemoryUser>(new SharedMemoryUser(sample_key, geopm_env_timeout()));
+        m_conf = (struct app_interface *)m_app_ctl_shmem->pointer(); 
+        int iter;
+        int pid = getpid();
+        for(iter = 0; iter < MAX_PROCS_PER_NODE; iter++) {
+            if(m_conf->pmap[iter] == pid) {
+                break;
+            }
+        }
+        m_shm_rank = iter;
+
+//        int iter;
+//        std::ofstream ofile;
+//        std::string fcinit = "configinit_" + std::to_string(getpid());
+//        printf("Writing to %s\n", fcinit.c_str());
+//        ofile.open(fcinit, std::ios::out);
+//        for(iter = 0; iter < (NUMTHREADS * NUMPCAPS); iter++) {
+//            ofile << "Thread: " << m_conf->config[m_shm_rank].threads[iter] << ", Pcap" << m_conf->config[m_shm_rank].pcap[iter] << "\n";
+//        }
+//        ofile.close();
+
+        printf("OMP: Rank:%d\t GetPID:%d\tGetPPID:%d\n", m_shm_rank, getpid(), getppid());
+        m_region_idx = 0;
     }
 
     OMPT::OMPT()
@@ -123,18 +175,21 @@ namespace geopm
             if (line.find(" r-xp ") != line.find(' ')) {
                 continue;
             }
-            std::pair<size_t, bool> aa(addr_begin, false);
-            std::pair<size_t, bool> bb(addr_end, true);
-            std::pair<std::pair<size_t, bool>, std::string> cc(aa, object);
-            std::pair<std::pair<size_t, bool>, std::string> dd(bb, object);
-            auto it0 = m_range_object_map.insert(m_range_object_map.begin(), cc);
-            auto it1 = m_range_object_map.insert(it0, dd);
+            //printf("object: %s, object_loc:%d, addr_begin:%zx, addr_end:%zx\n", object.c_str(), (int) object_loc, (int) addr_begin, (int)addr_end);
+            std::pair<size_t, bool> aa = std::make_pair(addr_begin, false);
+            std::pair<size_t, bool> bb = std::make_pair(addr_end, true);
+            std::pair<std::pair<size_t, bool>, std::string> cc = std::make_pair(aa, object);
+            std::pair<std::pair<size_t, bool>, std::string> dd = std::make_pair(bb, object);
+            auto it0 = m_range_object_map.insert(m_range_object_map.begin(), {aa, object});
+//                printf("it0:addr_begin:%zx\tit0:bool:%d\tit0:object:%s\n", it0->first.first, it0->first.second, it0->second.c_str());
+            auto it1 = m_range_object_map.insert(it0, {bb, object});
             ++it0;
-            if (it0 != it1) {
+            if (object != "[vdso]" && it0 != it1) { 
                 throw Exception("Error parsing /proc/self/maps, overlapping address ranges.",
                                 GEOPM_ERROR_LOGIC, __FILE__, __LINE__);
             }
         }
+        init_omp_shmem();
     }
 
     uint64_t OMPT::region_id(void *parallel_function)
@@ -172,6 +227,7 @@ namespace geopm
             std::ostringstream name_stream;
             name_stream << "[OMPT]" << it_min->second << ":0x" << std::setfill('0') << std::setw(16) << std::hex << offset;
             name = name_stream.str();
+            
         }
     }
 
@@ -238,6 +294,10 @@ extern "C"
     static ompt_parallel_id_t g_curr_parallel_id;
     static uint64_t g_curr_region_id = GEOPM_REGION_HASH_UNMARKED;
 
+    struct timeval start_t, end_t;
+
+    std::map<uint64_t, int> regionmap;
+    int region_idx;
     static void on_ompt_event_parallel_begin(ompt_task_id_t parent_task_id,
                                              ompt_frame_t *parent_task_frame,
                                              ompt_parallel_id_t parallel_id,
@@ -254,6 +314,39 @@ extern "C"
         if (g_curr_region_id != GEOPM_REGION_HASH_UNMARKED) {
             geopm_prof_enter(g_curr_region_id);
         }
+        int m_shm_rank = geopm::ompt().m_shm_rank;
+        //struct app_config *conf1 = (struct app_config *)geopm::ompt().m_app_ctl_shmem->pointer();
+        //printf("I read: %c\n", *(char *)geopm::ompt().get_shmem_ptr().pointer());
+
+        /* Need to reduce the structure size into just per-process thread count and powercap */
+        int iter;
+//        printf("From OMP, .m_shm_rank:%d, epochID:%ld\n", geopm::ompt().m_shm_rank, geopm::ompt().m_conf->epochid[geopm::ompt().m_shm_rank]);
+        unsigned long epochid = geopm::ompt().m_conf->epochid[m_shm_rank];
+        int configepochs = geopm::ompt().m_conf->configepochs[m_shm_rank];
+        if(epochid < configepochs) {
+            int nthread = geopm::ompt().m_conf->config[m_shm_rank].threads[geopm::ompt().m_conf->epochid[m_shm_rank]];
+            printf("Rank:%d Epoch:%ld\tPcap:%lf, threads:%d\n", m_shm_rank, epochid,
+                                    geopm::ompt().m_conf->config[m_shm_rank].pcap[epochid],
+                                    nthread);
+
+            //Apply the number of threads from the power balancing plugin
+            omp_set_num_threads(nthread);
+//            printf("From OMP, got thread: %d\n", nthread);
+        } else {
+//            printf("From OMP, Out of config explore, threads: %d\n", geopm::ompt().m_conf->thread[geopm::ompt().m_shm_rank]);
+//            omp_set_num_threads(geopm::ompt().m_conf->thread[geopm::ompt().m_shm_rank]);
+        }
+
+        //Output region ID, number of threads for the region
+        //
+//        std::ofstream ofile;
+//        std::string fcinit = "configselect_" + std::to_string(getpid());
+//        ofile.open(fcinit, std::ios::out);
+//        for(iter = 0; iter < NUMTHREADS * NUMPCAPS; iter++) {
+//            ofile << "Thread: " << geopm::ompt().m_conf->config[geopm::ompt().m_shm_rank].threads[iter] 
+//                  << ", Pcap: " << geopm::ompt().m_conf->config[geopm::ompt().m_shm_rank].pcap[iter] << "\n";
+//        }
+//        ofile.close();
     }
 
     static void on_ompt_event_parallel_end(ompt_parallel_id_t parallel_id,
@@ -265,8 +358,35 @@ extern "C"
             g_curr_parallel_id == parallel_id) {
             geopm_prof_exit(g_curr_region_id);
         }
-    }
 
+        //Stop timer
+        gettimeofday(&end_t, NULL);
+        double elapsedTime = (end_t.tv_sec - start_t.tv_sec) * 1000.0;      // sec to ms
+        elapsedTime += (end_t.tv_usec - start_t.tv_usec) / 1000.0;
+
+        /* If you're in the configuration exploration phase, save power usage and elapsed time */
+        int m_shm_rank = geopm::ompt().m_shm_rank;
+        int epochid = geopm::ompt().m_conf->epochid[m_shm_rank];
+        int configepochs = geopm::ompt().m_conf->configepochs[m_shm_rank];
+        if(geopm::ompt().m_conf->epochid[m_shm_rank] < 
+                  geopm::ompt().m_conf->configepochs[m_shm_rank]) {
+
+            auto it = regionmap.find(g_curr_region_id);
+            if(regionmap.end() != it) {
+                /* Region found, use that region ID for configuration lookup */
+                region_idx = it->second;
+            } else {
+                region_idx = geopm::ompt().m_region_idx;
+                /* Unseen region, append profiled information to the region vector */
+//                geopm::ompt().m_conf->region[m_shm_rank][region_idx].elapsed_time[epochid] = elapsedTime;
+//                geopm::ompt().m_conf->region[m_shm_rank][region_idx].Pkg_watts[epochid]    = elapsedTime;
+               
+                geopm::ompt().m_region_idx++;
+            } 
+        } else {
+            /* Do nothing */
+        }
+    }
 
     void ompt_initialize(ompt_function_lookup_t lookup,
                          const char *runtime_version,

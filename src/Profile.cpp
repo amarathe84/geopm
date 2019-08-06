@@ -142,6 +142,7 @@ namespace geopm
             }
             m_is_enabled = false;
         }
+        init_app_config();
 #ifdef GEOPM_OVERHEAD
         m_overhead_time_startup = geopm_time_since(&overhead_entry);
 #endif
@@ -271,6 +272,20 @@ namespace geopm
         m_shm_comm->barrier();
         m_ctl_msg->step();  // M_STATUS_SAMPLE_BEGIN
         m_ctl_msg->wait();  // M_STATUS_SAMPLE_BEGIN
+    }
+
+    void Profile::init_app_config() {
+        std::string sample_key(geopm_env_shmkey());
+        sample_key += configshmkey;
+        m_app_ctl_shmem = std::unique_ptr<ISharedMemoryUser>(new SharedMemoryUser(sample_key, geopm_env_timeout()));
+        m_conf = (struct app_interface *)m_app_ctl_shmem->pointer(); 
+        m_conf->pmap[m_shm_rank] = getpid();
+    }
+
+    inline void Profile::set_app_config() {
+//        printf("Profiler: GetPID:%d\tGetPPID:%d\tRank:%d\tgRank:%d\n", getpid(), getppid(), m_rank, m_shm_rank); 
+//        printf("Rank:%d, gRank:%d hit epoch\n", m_rank, m_shm_rank);
+        m_conf->epochid[m_shm_rank]++;
     }
 
     Profile::~Profile()
@@ -477,6 +492,8 @@ namespace geopm
         (void) geopm_time(&(sample.timestamp));
         sample.progress = 0.0;
         m_table->insert(sample);
+
+        set_app_config();
 
 #ifdef GEOPM_OVERHEAD
         m_overhead_time += geopm_time_since(&overhead_entry);

@@ -38,6 +38,8 @@
 
 #include "geopm_time.h"
 #include "Agent.hpp"
+#include "SharedMemory.hpp"
+#include "AppConfigData.hpp"
 
 namespace geopm
 {
@@ -129,6 +131,8 @@ namespace geopm
                 M_TRACE_SAMPLE_EPOCH_RUNTIME,
                 M_TRACE_SAMPLE_POWER_LIMIT,
                 M_TRACE_SAMPLE_ENFORCED_POWER_LIMIT,
+                M_TRACE_SAMPLE_THREADS_P1,
+                M_TRACE_SAMPLE_THREADS_P2,
                 M_TRACE_NUM_SAMPLE,
             };
 
@@ -298,8 +302,11 @@ namespace geopm
                     bool sample_platform(std::vector<double> &out_sample) override;
                     std::vector<std::string> trace_names(void) const override;
                     void trace_values(std::vector<double> &values) override;
+                    struct app_interface *m_conf;
+                    void adjust_threads();
                 private:
                     void init_platform_io(void);
+                    void init_config_explore_interface(void);
                     IPlatformIO &m_platform_io;
                     IPlatformTopo &m_platform_topo;
                     double m_power_max;
@@ -313,6 +320,8 @@ namespace geopm
                     double m_power_headroom;
                     const double M_STABILITY_FACTOR;
                     bool m_is_out_of_bounds;
+                    int config_threads[MAX_PROCS_PER_NODE];
+                    std::unique_ptr<geopm::SharedMemory> m_app_ctl_shmem;
             };
     };
 }
